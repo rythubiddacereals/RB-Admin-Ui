@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    font-family: 'Montserrat', system-ui, sans-serif;
+    /* Slightly warmer than pure #FBFAF5 so the admin doesn't feel
+       clinical; matches the mobile app background. */
+    background-color: #FBFAF5;
+    color: #161612;
+  }
+}
+
+@layer utilities {
+  /* Scrollable containers that shouldn't SHOW a scrollbar (e.g. the
+     customers table body) — scrolling still works via wheel/touch. */
+  .no-scrollbar {
+    scrollbar-width: none;      /* Firefox */
+    -ms-overflow-style: none;   /* legacy Edge/IE */
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;              /* Chrome / Safari */
+  }
+}
