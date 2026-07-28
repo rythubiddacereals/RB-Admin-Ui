@@ -141,7 +141,7 @@ export function BulkImportPage() {
     <div className="space-y-6">
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-extrabold text-primary-700">
-          <Upload size={22} /> Bulk Import Products
+          <Upload size={22} /> Bulk Import Product
         </h1>
         <p className="mt-1 text-sm font-semibold text-secondary-800">
           Upload an Excel file with product rows plus a ZIP of the images
