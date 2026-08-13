@@ -405,7 +405,7 @@ export function ProductFormPage() {
           </div>
           <p className={hintCls}>
             Pricing is defined per variant in the "Quantity variants"
-            section below (₹ + MRP on each row). This page has no
+            section below (₹ on each row). This page has no
             product-level price.
           </p>
         </SectionCard>
@@ -536,7 +536,6 @@ export function ProductFormPage() {
                     <th className="px-3 py-2 text-left font-bold">#</th>
                     <th className="px-3 py-2 text-left font-bold">Name</th>
                     <th className="px-3 py-2 text-right font-bold">Price (₹)</th>
-                    <th className="px-3 py-2 text-right font-bold">MRP (₹)</th>
                     <th className="px-3 py-2" />
                   </tr>
                 </thead>
@@ -578,21 +577,9 @@ export function ProductFormPage() {
                           disabled={saveMut.isPending}
                         />
                       </td>
-                      <td className="px-3 py-2 text-right">
-                        <input
-                          type="number"
-                          step="0.01"
-                          min={0}
-                          value={q.marketPrice}
-                          onChange={e =>
-                            setOption(idx, {
-                              marketPrice: Number(e.target.value) || 0,
-                            })
-                          }
-                          className="w-28 rounded-md border border-secondary-200 px-2 py-1.5 text-right font-semibold focus:border-primary-500 focus:outline-none"
-                          disabled={saveMut.isPending}
-                        />
-                      </td>
+                      {/* Market price (MRP) removed from the UI — the
+                          field still rides through the payload untouched
+                          so existing rows keep their stored values. */}
                       <td className="px-3 py-2">
                         <div className="flex justify-end gap-1">
                           <button

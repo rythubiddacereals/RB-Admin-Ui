@@ -5,6 +5,7 @@ import {
   EyeOff,
   KeyRound,
   Loader2,
+  Unlock,
   RefreshCw,
   Shield,
   UserPlus,
@@ -12,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { isSuperAdmin, useAuthStore } from '@/store/auth';
 
 /**
  * Support Users — the admin/DA/manager accounts that can sign into
@@ -27,21 +29,40 @@ import { api } from '@/lib/api';
  * unless the user explicitly ticks "reset password".
  */
 
+/**
+ * Store Manager and Regional Head are deliberately absent — those roles
+ * aren't part of current operations. Existing accounts that still carry
+ * them keep working (the backend still accepts the values); they just
+ * can't be granted from this form anymore.
+ */
 const ROLE_OPTIONS = [
   { value: 'ADMIN', label: 'Admin', hint: 'Full back-office access' },
-  { value: 'STORE_MANAGER', label: 'Store Manager', hint: 'Back-office minus superadmin' },
-  { value: 'DELIVERY_AGENT', label: 'Delivery Agent', hint: 'Only sees /deliveries' },
-  { value: 'REGIONAL_HEAD', label: 'Regional Head', hint: 'Multi-store oversight' },
+  { value: 'DELIVERY_AGENT', label: 'Delivery Agent', hint: 'Only sees deliveries' },
 ];
+
+/**
+ * Only shown to (and only grantable by) a signed-in super admin. The
+ * backend enforces this independently — hiding the option here is UX,
+ * not security.
+ */
+const SUPER_ADMIN_OPTION = {
+  value: 'SUPER_ADMIN',
+  label: 'Super Admin',
+  hint: 'Everything + manages super admins. OTP login.',
+};
 
 interface SupportUser {
   id: number;
   username: string;
   email: string;
   roles: string;
+  phone: string;
   isActive: number;
   failCount: number;
 }
+
+const userIsSuper = (u: SupportUser) =>
+  rolesToArray(u.roles).includes('SUPER_ADMIN');
 
 interface ListResponse {
   count: number;
@@ -61,6 +82,8 @@ function arrayToRoles(arr: string[]): string {
 
 export function SupportUsersPage() {
   const qc = useQueryClient();
+  const me = useAuthStore(s => s.user);
+  const canManageSupers = isSuperAdmin(me);
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['admin', 'support-users'],
     queryFn: async () => {
@@ -104,6 +127,20 @@ export function SupportUsersPage() {
       flash(
         `${fresh.isActive === 1 ? 'Enabled' : 'Disabled'} ${fresh.username}`,
       );
+    },
+  });
+
+  const unlockMut = useMutation({
+    mutationFn: async (id: number) => {
+      const r = await api.patch<SupportUser>(
+        `/api/admin/support-users/${id}/unlock`,
+        {},
+      );
+      return r.data;
+    },
+    onSuccess: fresh => {
+      qc.invalidateQueries({ queryKey: ['admin', 'support-users'] });
+      flash(`Unlocked ${fresh.username} — failed attempts reset to 0`);
     },
   });
 
@@ -206,7 +243,28 @@ export function SupportUsersPage() {
                     )}
                   </td>
                   <td className="px-4 py-3">
+                    {/* A super admin row is untouchable for regular
+                        admins — the backend rejects the calls anyway,
+                        so showing the buttons would only produce 403
+                        toasts. */}
+                    {userIsSuper(u) && !canManageSupers ? (
+                      <div className="text-right text-[10px] font-bold uppercase text-secondary-500">
+                        super admin only
+                      </div>
+                    ) : (
                     <div className="flex justify-end gap-1">
+                      {/* Only rendered for locked accounts — login refuses
+                          fail_count > 3, and the counter can't self-heal
+                          because it only resets on a successful login. */}
+                      {u.failCount > 3 ? (
+                        <button
+                          onClick={() => unlockMut.mutate(u.id)}
+                          disabled={unlockMut.isPending}
+                          className="rounded-lg px-2 py-1 text-xs font-bold text-warning hover:bg-warning-soft disabled:opacity-50"
+                        >
+                          <Unlock size={12} className="inline" /> Unlock
+                        </button>
+                      ) : null}
                       <button
                         onClick={() => setEditing(u)}
                         className="rounded-lg px-2 py-1 text-xs font-bold text-primary-700 hover:bg-primary-50"
@@ -238,6 +296,7 @@ export function SupportUsersPage() {
                         )}
                       </button>
                     </div>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -248,6 +307,7 @@ export function SupportUsersPage() {
 
       {showCreate ? (
         <CreateUserModal
+          canGrantSuper={canManageSupers}
           onCancel={() => setShowCreate(false)}
           onCreated={() => {
             setShowCreate(false);
@@ -259,7 +319,12 @@ export function SupportUsersPage() {
 
       {editing ? (
         <EditUserModal
+          // Remount per user: the form fields are useState-initialized
+          // from props, and React would otherwise carry one user's
+          // half-edited state into another user's modal.
+          key={editing.id}
           user={editing}
+          canGrantSuper={canManageSupers}
           onCancel={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
@@ -275,16 +340,21 @@ export function SupportUsersPage() {
 // ─── Modals ───────────────────────────────────────────────────────
 
 function CreateUserModal({
+  canGrantSuper,
   onCancel,
   onCreated,
 }: {
+  canGrantSuper: boolean;
   onCancel: () => void;
   onCreated: () => void;
 }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [roles, setRoles] = useState<string[]>(['ADMIN']);
+  const [phone, setPhone] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const superSelected = roles.includes('SUPER_ADMIN');
 
   const mut = useMutation({
     mutationFn: async () => {
@@ -295,6 +365,7 @@ function CreateUserModal({
         // username; the API accepts an empty email.
         email: '',
         roles: arrayToRoles(roles),
+        phone: phone.trim(),
       });
       return r.data;
     },
@@ -305,9 +376,15 @@ function CreateUserModal({
       ),
   });
 
+  const invalid =
+    !username.trim() ||
+    password.length < 4 ||
+    roles.length === 0 ||
+    (superSelected && phone.trim().length !== 10);
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || password.length < 4 || roles.length === 0) return;
+    if (invalid) return;
     mut.mutate();
   };
 
@@ -340,7 +417,32 @@ function CreateUserModal({
           />
         </Field>
         <Field label="Roles" required>
-          <RolesPicker value={roles} onChange={setRoles} disabled={mut.isPending} />
+          <RolesPicker
+            value={roles}
+            onChange={setRoles}
+            disabled={mut.isPending}
+            includeSuperAdmin={canGrantSuper}
+          />
+        </Field>
+
+        {/* OTP destination — the whole point of a super admin is the
+            second factor, so the number is mandatory for that role. */}
+        <Field label={superSelected ? 'Phone (login OTP)' : 'Phone (optional)'} required={superSelected}>
+          <input
+            type="tel"
+            inputMode="numeric"
+            maxLength={10}
+            value={phone}
+            onChange={e => setPhone(e.target.value.replace(/\D/g, ''))}
+            className={inputCls}
+            placeholder="10-digit mobile number"
+            disabled={mut.isPending}
+          />
+          {superSelected ? (
+            <p className="mt-1 text-xs font-semibold text-secondary-700">
+              Super admin sign-in requires an SMS code sent to this number.
+            </p>
+          ) : null}
         </Field>
 
         {error ? (
@@ -353,9 +455,7 @@ function CreateUserModal({
           submitting={mut.isPending}
           submitLabel="Create user"
           onCancel={onCancel}
-          disabled={
-            !username.trim() || password.length < 4 || roles.length === 0
-          }
+          disabled={invalid}
         />
       </form>
     </ModalShell>
@@ -364,18 +464,22 @@ function CreateUserModal({
 
 function EditUserModal({
   user,
+  canGrantSuper,
   onCancel,
   onSaved,
 }: {
   user: SupportUser;
+  canGrantSuper: boolean;
   onCancel: () => void;
   onSaved: () => void;
 }) {
   const [username, setUsername] = useState(user.username);
   const [roles, setRoles] = useState<string[]>(rolesToArray(user.roles));
-  const [resetPassword, setResetPassword] = useState(false);
+  const [phone, setPhone] = useState(user.phone ?? '');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const superSelected = roles.includes('SUPER_ADMIN');
 
   const mut = useMutation({
     mutationFn: async () => {
@@ -385,8 +489,12 @@ function EditUserModal({
         // Email field removed from the form — pass the stored value
         // through unchanged so editing never wipes it.
         email: user.email ?? '',
+        phone: phone.trim(),
       };
-      if (resetPassword && password.trim().length >= 4) {
+      // Blank = keep the current password (API semantics). Not sent at
+      // all for super admins — their sign-in is phone+OTP, so a password
+      // would be a dead credential.
+      if (!superSelected && password.trim().length >= 4) {
         body.password = password;
       }
       const r = await api.put<SupportUser>(
@@ -405,7 +513,10 @@ function EditUserModal({
   const disabled =
     !username.trim() ||
     roles.length === 0 ||
-    (resetPassword && password.length < 4);
+    (superSelected && phone.trim().length !== 10) ||
+    // Typed something too short to be a valid password — block rather
+    // than silently keeping the old one.
+    (!superSelected && password.length > 0 && password.length < 4);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -429,36 +540,54 @@ function EditUserModal({
           />
         </Field>
         <Field label="Roles" required>
-          <RolesPicker value={roles} onChange={setRoles} disabled={mut.isPending} />
+          <RolesPicker
+            value={roles}
+            onChange={setRoles}
+            disabled={mut.isPending}
+            includeSuperAdmin={canGrantSuper}
+          />
         </Field>
 
-        <div className="rounded-lg border border-secondary-200 bg-secondary-50 p-3">
-          <label className="flex items-center gap-2 text-sm font-bold text-gray-800">
-            <input
-              type="checkbox"
-              checked={resetPassword}
-              onChange={e => setResetPassword(e.target.checked)}
-              disabled={mut.isPending}
-            />
-            Reset password
-          </label>
-          {resetPassword ? (
+        <Field label={superSelected ? 'Phone (login OTP)' : 'Phone (optional)'} required={superSelected}>
+          <input
+            type="tel"
+            inputMode="numeric"
+            maxLength={10}
+            value={phone}
+            onChange={e => setPhone(e.target.value.replace(/\D/g, ''))}
+            className={inputCls}
+            placeholder="10-digit mobile number"
+            disabled={mut.isPending}
+          />
+          {superSelected ? (
+            <p className="mt-1 text-xs font-semibold text-secondary-700">
+              Super admin sign-in requires an SMS code sent to this number.
+            </p>
+          ) : null}
+        </Field>
+
+        {/* Password update — staff roles only. Super admins sign in with
+            phone + OTP, so a password field for them would be a dead
+            credential and is hidden entirely. */}
+        {!superSelected ? (
+          <Field label="New password (optional)">
             <input
               type="password"
+              autoComplete="new-password"
               value={password}
               onChange={e => setPassword(e.target.value)}
-              className={`${inputCls} mt-2`}
-              placeholder="New password (min 4 chars)"
+              className={inputCls}
+              placeholder="Leave blank to keep current password"
               minLength={4}
               disabled={mut.isPending}
-              autoFocus
             />
-          ) : (
-            <p className="mt-1 text-xs font-semibold text-secondary-700">
-              Existing password stays in place.
-            </p>
-          )}
-        </div>
+            {password.length > 0 && password.length < 4 ? (
+              <p className="mt-1 text-xs font-semibold text-danger">
+                At least 4 characters.
+              </p>
+            ) : null}
+          </Field>
+        ) : null}
 
         {error ? (
           <div className="rounded-lg bg-danger-soft px-4 py-2 text-sm font-semibold text-danger">
@@ -496,11 +625,15 @@ function ModalShell({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onClick={onCancel}
     >
+      {/* Capped height + internal scroll: the earlier version grew with
+          its content and taller forms pushed the title and action
+          buttons off-screen. The sticky header keeps the ✕ reachable
+          no matter how far the body scrolls. */}
       <div
-        className="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl"
+        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between border-b border-secondary-100 px-6 py-4">
           <h2 className="text-lg font-extrabold text-primary-700">{title}</h2>
           <button
             onClick={onCancel}
@@ -509,7 +642,7 @@ function ModalShell({
             <X size={18} />
           </button>
         </div>
-        {children}
+        <div className="overflow-y-auto px-6 py-5">{children}</div>
       </div>
     </div>
   );
@@ -572,10 +705,13 @@ function RolesPicker({
   value,
   onChange,
   disabled,
+  includeSuperAdmin,
 }: {
   value: string[];
   onChange: (roles: string[]) => void;
   disabled?: boolean;
+  /** Only super admins see (or can grant) the SUPER_ADMIN option. */
+  includeSuperAdmin?: boolean;
 }) {
   const toggle = (role: string) => {
     if (value.includes(role)) {
@@ -584,9 +720,12 @@ function RolesPicker({
       onChange([...value, role]);
     }
   };
+  const options = includeSuperAdmin
+    ? [SUPER_ADMIN_OPTION, ...ROLE_OPTIONS]
+    : ROLE_OPTIONS;
   return (
     <div className="grid gap-2 sm:grid-cols-2">
-      {ROLE_OPTIONS.map(o => {
+      {options.map(o => {
         const on = value.includes(o.value);
         return (
           <button

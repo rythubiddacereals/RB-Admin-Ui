@@ -17,6 +17,7 @@ import { CategoriesPage } from '@/pages/categories/CategoriesPage';
 import { CustomersListPage } from '@/pages/customers/CustomersList';
 import { CustomerDetailPage } from '@/pages/customers/CustomerDetail';
 import { DeliveryCentersPage } from '@/pages/delivery/DeliveryCentersPage';
+import { ShippingRulesPage } from '@/pages/shipping/ShippingRulesPage';
 import { MyDeliveriesPage } from '@/pages/deliveries/MyDeliveriesPage';
 import { QuantityOptionsPage } from '@/pages/quantityoptions/QuantityOptionsPage';
 import { SupportUsersPage } from '@/pages/supportusers/SupportUsersPage';
@@ -84,6 +85,7 @@ export default function App() {
         <Route path="customers" element={<CustomersListPage />} />
         <Route path="customers/:customerId" element={<CustomerDetailPage />} />
         <Route path="delivery-centers" element={<DeliveryCentersPage />} />
+        <Route path="shipping-rules" element={<ShippingRulesPage />} />
         <Route path="deliveries" element={<MyDeliveriesPage />} />
         <Route path="quantity-options" element={<QuantityOptionsPage />} />
         <Route path="support-users" element={<SupportUsersPage />} />

@@ -288,11 +288,6 @@ export function ProductFlagListPage({ preset }: { preset: FlagPreset }) {
                       <span className="text-lg font-extrabold text-primary-700">
                         {dp.price > 0 ? `₹${dp.price.toFixed(2)}` : 'Call us'}
                       </span>
-                      {dp.mrp !== null && dp.price > 0 ? (
-                        <span className="text-xs font-bold text-secondary-500 line-through">
-                          ₹{dp.mrp.toFixed(2)}
-                        </span>
-                      ) : null}
                       {dp.unit ? (
                         <span className="text-xs font-semibold text-secondary-700">
                           / {dp.unit}
@@ -305,15 +300,7 @@ export function ProductFlagListPage({ preset }: { preset: FlagPreset }) {
                           <span
                             key={q.id}
                             className="rounded bg-secondary-100 px-1.5 py-0.5 text-[10px] font-bold text-secondary-800"
-                            title={
-                              q.price > 0
-                                ? `₹${q.price.toFixed(2)}${
-                                    q.marketPrice > q.price
-                                      ? ` (MRP ₹${q.marketPrice.toFixed(2)})`
-                                      : ''
-                                  }`
-                                : 'Call us'
-                            }
+                            title={q.price > 0 ? `₹${q.price.toFixed(2)}` : 'Call us'}
                           >
                             {q.name}
                           </span>

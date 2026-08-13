@@ -226,18 +226,10 @@ export function ProductDetailPage() {
                 <th className="px-4 py-2 text-left font-bold">Label</th>
                 <th className="px-4 py-2 text-left font-bold">Type</th>
                 <th className="px-4 py-2 text-right font-bold">Price</th>
-                <th className="px-4 py-2 text-right font-bold">MRP</th>
-                <th className="px-4 py-2 text-right font-bold">Discount</th>
               </tr>
             </thead>
             <tbody>
               {p.qtyOptions.map(q => {
-                const discount =
-                  q.marketPrice > 0 && q.marketPrice > q.price
-                    ? Math.round(
-                        ((q.marketPrice - q.price) / q.marketPrice) * 100,
-                      )
-                    : 0;
                 return (
                   <tr key={q.id} className="border-t border-secondary-100">
                     <td className="px-4 py-3 text-gray-700">{q.displayOrder}</td>
@@ -247,18 +239,6 @@ export function ProductDetailPage() {
                     <td className="px-4 py-3 text-gray-800">{q.type || '—'}</td>
                     <td className="px-4 py-3 text-right font-bold text-primary-700">
                       ₹{q.price.toFixed(2)}
-                    </td>
-                    <td className="px-4 py-3 text-right text-secondary-700">
-                      {q.marketPrice > 0 ? `₹${q.marketPrice.toFixed(2)}` : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {discount > 0 ? (
-                        <span className="rounded-full bg-danger-soft px-2 py-0.5 text-xs font-bold text-danger">
-                          -{discount}%
-                        </span>
-                      ) : (
-                        '—'
-                      )}
                     </td>
                   </tr>
                 );

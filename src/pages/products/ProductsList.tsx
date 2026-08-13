@@ -222,11 +222,6 @@ export function ProductsListPage() {
                       <span className="text-lg font-extrabold text-primary-700">
                         {price.price > 0 ? `₹${price.price.toFixed(2)}` : 'Call us'}
                       </span>
-                      {price.mrp !== null && price.price > 0 ? (
-                        <span className="text-xs font-bold text-secondary-700 line-through">
-                          ₹{price.mrp.toFixed(2)}
-                        </span>
-                      ) : null}
                       {price.unit ? (
                         <span className="text-xs font-semibold text-secondary-700">
                           / {price.unit}
@@ -239,15 +234,7 @@ export function ProductsListPage() {
                           <span
                             key={q.id}
                             className="rounded bg-secondary-100 px-1.5 py-0.5 text-[10px] font-bold text-secondary-800"
-                            title={
-                              q.price > 0
-                                ? `₹${q.price.toFixed(2)}${
-                                    q.marketPrice > q.price
-                                      ? ` (MRP ₹${q.marketPrice.toFixed(2)})`
-                                      : ''
-                                  }`
-                                : 'Call us'
-                            }
+                            title={q.price > 0 ? `₹${q.price.toFixed(2)}` : 'Call us'}
                           >
                             {q.name}
                           </span>

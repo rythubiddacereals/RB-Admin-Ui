@@ -23,7 +23,13 @@ interface AuthState {
   status: 'idle' | 'checking' | 'authed' | 'unauthed';
   error: string | null;
   hydrate: () => Promise<void>;
+  /** Username + password — regular admins only; super admins are
+   * refused here (they sign in by phone). */
   login: (username: string, password: string) => Promise<void>;
+  /** Passwordless super-admin flow, step 1: SMS a code to this phone. */
+  superRequestOtp: (phone: string) => Promise<void>;
+  /** Passwordless super-admin flow, step 2: code → signed in. */
+  superVerifyOtp: (phone: string, otp: string) => Promise<void>;
   logout: () => void;
 }
 
@@ -73,6 +79,44 @@ export const useAuthStore = create<AuthState>(set => ({
     }
   },
 
+  superRequestOtp: async (phone) => {
+    set({ status: 'unauthed', error: null });
+    try {
+      await api.post('/api/admin/login/super/request-otp', { phone });
+    } catch (e: any) {
+      const msg =
+        e?.response?.data?.message ??
+        e?.message ??
+        'Could not send the code — please try again.';
+      set({ error: msg });
+      throw e;
+    }
+  },
+
+  superVerifyOtp: async (phone, otp) => {
+    set({ status: 'checking', error: null });
+    try {
+      const r = await api.post<{ token: string; user: AdminUser }>(
+        '/api/admin/login/super/verify-otp',
+        { phone, otp },
+      );
+      setStoredToken(r.data.token);
+      set({
+        user: r.data.user,
+        token: r.data.token,
+        status: 'authed',
+        error: null,
+      });
+    } catch (e: any) {
+      const msg =
+        e?.response?.data?.message ??
+        e?.message ??
+        'Verification failed — please try again.';
+      set({ status: 'unauthed', error: msg });
+      throw e;
+    }
+  },
+
   logout: () => {
     setStoredToken(null);
     set({ user: null, token: null, status: 'unauthed' });
@@ -96,6 +140,7 @@ export const useAuthReady = () => {
 // disagree about who is what. See WorkflowUserRoles.java on the
 // backend for the canonical constants.
 
+export const ROLE_SUPER_ADMIN = 'SUPER_ADMIN';
 export const ROLE_ADMIN = 'ADMIN';
 export const ROLE_DELIVERY_AGENT = 'DELIVERY_AGENT';
 export const ROLE_STORE_MANAGER = 'STORE_MANAGER';
@@ -105,6 +150,19 @@ export function hasRole(user: AdminUser | null, role: string): boolean {
   if (!user || !user.roles) return false;
   return user.roles.includes(role);
 }
+
+/**
+ * Whole-token match, unlike hasRole's `includes` — with substring
+ * matching, checking for ADMIN inside "SUPER_ADMIN" is true (desired:
+ * a super admin can do everything an admin can) but checking for
+ * SUPER_ADMIN must never be true for a plain ADMIN.
+ */
+export const isSuperAdmin = (u: AdminUser | null): boolean => {
+  if (!u || !u.roles) return false;
+  return u.roles
+    .split(',')
+    .some(t => t.trim().toUpperCase() === ROLE_SUPER_ADMIN);
+};
 
 export const isAdmin = (u: AdminUser | null) => hasRole(u, ROLE_ADMIN);
 export const isDeliveryAgent = (u: AdminUser | null) =>
