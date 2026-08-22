@@ -1,141 +1,110 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Award,
   Edit2,
+  ExternalLink,
   Eye,
   EyeOff,
+  Instagram,
   Loader2,
   Plus,
   RefreshCw,
-  Sprout,
-  Star,
   Trash2,
   X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
 /**
- * Farmer partner directory — powers the Meet Today's Farmer overlay
- * on the home hero and the /farmers list on the shop.
+ * Curated Instagram reels for the website's "Follow us on Instagram"
+ * strip. Paste the link Instagram gives you (Share → Copy link) —
+ * the backend canonicalizes it and the shop renders the official
+ * embed player, so there's nothing else to upload.
  *
- * Hard delete IS exposed here; farmers aren't referenced by other
- * tables. `Hide` is the reversible option; `Delete` is not.
- *
- * The "today's farmer" flag is mutually exclusive: clicking Set as
- * Today's on any row atomically clears the flag on every other
- * farmer server-side, so exactly one row is featured at a time.
- *
- * `storyFull` is a rich-text HTML field — MVP renders a plain
- * textarea; upgrade to react-quill (or similar) later without any
- * API change since we already store raw HTML.
+ * Hard delete IS exposed here — a reel row isn't referenced by
+ * anything else; deleting it just drops the embed from the site.
  */
 
-interface Farmer {
+interface Reel {
   id: number;
-  name: string;
-  location: string;
-  cropSpecialty: string;
-  storyShort: string;
-  storyFull: string;
-  yearsFarming: number | null;
-  harvestedDaysAgo: number | null;
+  reelUrl: string;
+  caption: string;
+  /** Raw S3 filename stored in the DB (what gets saved back). */
+  videoUrl: string;
+  /** Resolved URL for previewing the uploaded video. */
+  videoPreview: string;
   isActive: number;
-  isTodaysFarmer: number;
   sortOrder: number;
-  updatedAt: string;
 }
 
 interface ListResponse {
   count: number;
-  farmers: Farmer[];
+  reels: Reel[];
 }
 
 interface FormValues {
   id: number;
-  name: string;
-  location: string;
-  cropSpecialty: string;
-  storyShort: string;
-  storyFull: string;
-  yearsFarming: string;
-  harvestedDaysAgo: string;
+  reelUrl: string;
+  caption: string;
+  videoUrl: string;
+  videoPreview: string;
   isActive: number;
   sortOrder: string;
 }
 
 const EMPTY_FORM: FormValues = {
   id: 0,
-  name: '',
-  location: '',
-  cropSpecialty: '',
-  storyShort: '',
-  storyFull: '',
-  yearsFarming: '',
-  harvestedDaysAgo: '',
+  reelUrl: '',
+  caption: '',
+  videoUrl: '',
+  videoPreview: '',
   isActive: 1,
   sortOrder: '0',
 };
 
-function farmerToForm(f: Farmer): FormValues {
+function reelToForm(r: Reel): FormValues {
   return {
-    id: f.id,
-    name: f.name,
-    location: f.location,
-    cropSpecialty: f.cropSpecialty,
-    storyShort: f.storyShort,
-    storyFull: f.storyFull,
-    yearsFarming: f.yearsFarming != null ? String(f.yearsFarming) : '',
-    harvestedDaysAgo: f.harvestedDaysAgo != null ? String(f.harvestedDaysAgo) : '',
-    isActive: f.isActive,
-    sortOrder: String(f.sortOrder),
+    id: r.id,
+    reelUrl: r.reelUrl,
+    caption: r.caption,
+    videoUrl: r.videoUrl,
+    videoPreview: r.videoPreview,
+    isActive: r.isActive,
+    sortOrder: String(r.sortOrder),
   };
 }
 
 function formToPayload(f: FormValues) {
   return {
-    name: f.name.trim(),
-    location: f.location.trim(),
-    cropSpecialty: f.cropSpecialty.trim(),
-    storyShort: f.storyShort,
-    storyFull: f.storyFull,
-    yearsFarming: f.yearsFarming.trim() === '' ? null : Number(f.yearsFarming),
-    harvestedDaysAgo: f.harvestedDaysAgo.trim() === '' ? null : Number(f.harvestedDaysAgo),
+    reelUrl: f.reelUrl.trim(),
+    caption: f.caption.trim(),
+    videoUrl: f.videoUrl.trim(),
     isActive: f.isActive,
     sortOrder: Number(f.sortOrder) || 0,
   };
 }
 
-export function FarmersPage() {
+/** Shortcode part of the permalink — compact display label for the table. */
+function reelCode(url: string): string {
+  const m = url.match(/instagram\.com\/(?:reels?|p)\/([A-Za-z0-9_-]+)/);
+  return m ? m[1] : url;
+}
+
+export function InstagramReelsPage() {
   const qc = useQueryClient();
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['admin', 'farmers'],
+    queryKey: ['admin', 'instagram-reels'],
     queryFn: async () => {
-      const r = await api.get<ListResponse>('/api/admin/farmers');
+      const r = await api.get<ListResponse>('/api/admin/instagram-reels');
       return r.data;
     },
   });
 
   const [form, setForm] = useState<FormValues | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<Farmer | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Reel | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
 
-  const farmers = useMemo(() => data?.farmers ?? [], [data]);
-
-  // Client-side filter across the three fields the admin thinks in:
-  // who (name), what they grow (crop), where (location).
-  const filtered = useMemo(() => {
-    if (!query.trim()) return farmers;
-    const needle = query.trim().toLowerCase();
-    return farmers.filter(
-      f =>
-        (f.name ?? '').toLowerCase().includes(needle) ||
-        (f.cropSpecialty ?? '').toLowerCase().includes(needle) ||
-        (f.location ?? '').toLowerCase().includes(needle),
-    );
-  }, [farmers, query]);
+  const reels = useMemo(() => data?.reels ?? [], [data]);
 
   const flash = (msg: string) => {
     setToast(msg);
@@ -146,58 +115,51 @@ export function FarmersPage() {
     mutationFn: async (payload: FormValues) => {
       const body = formToPayload(payload);
       if (payload.id > 0) {
-        const r = await api.put<Farmer>(`/api/admin/farmers/${payload.id}`, body);
+        const r = await api.put<Reel>(`/api/admin/instagram-reels/${payload.id}`, body);
         return r.data;
       }
-      const r = await api.post<Farmer>('/api/admin/farmers', body);
+      const r = await api.post<Reel>('/api/admin/instagram-reels', body);
       return r.data;
     },
     onSuccess: fresh => {
-      qc.invalidateQueries({ queryKey: ['admin', 'farmers'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'instagram-reels'] });
       setForm(null);
       setSaveError(null);
-      flash(`Saved · ${fresh.name}`);
+      flash(`Saved · ${fresh.caption || reelCode(fresh.reelUrl)}`);
     },
     onError: (err: any) => {
       setSaveError(
-        err?.response?.data?.message ?? err?.message ?? 'Could not save farmer.',
+        err?.response?.data?.message ??
+          err?.message ??
+          'Could not save reel.',
       );
     },
   });
 
-  const toggleActiveMut = useMutation({
+  const toggleMut = useMutation({
     mutationFn: async ({ id, next }: { id: number; next: number }) => {
-      const r = await api.patch<Farmer>(`/api/admin/farmers/${id}/active`, {
+      const r = await api.patch<Reel>(`/api/admin/instagram-reels/${id}/active`, {
         isActive: next,
       });
       return r.data;
     },
     onSuccess: fresh => {
-      qc.invalidateQueries({ queryKey: ['admin', 'farmers'] });
-      flash(`${fresh.isActive === 1 ? 'Activated' : 'Hidden'} ${fresh.name}`);
-    },
-  });
-
-  const todaysMut = useMutation({
-    mutationFn: async (id: number) => {
-      const r = await api.patch<Farmer>(`/api/admin/farmers/${id}/todays`, {});
-      return r.data;
-    },
-    onSuccess: fresh => {
-      qc.invalidateQueries({ queryKey: ['admin', 'farmers'] });
-      flash(`Now featured: ${fresh.name}`);
+      qc.invalidateQueries({ queryKey: ['admin', 'instagram-reels'] });
+      flash(
+        `${fresh.isActive === 1 ? 'Now showing' : 'Hidden'} · ${fresh.caption || reelCode(fresh.reelUrl)}`,
+      );
     },
   });
 
   const deleteMut = useMutation({
     mutationFn: async (id: number) => {
-      await api.delete(`/api/admin/farmers/${id}`);
+      await api.delete(`/api/admin/instagram-reels/${id}`);
       return id;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['admin', 'farmers'] });
+      qc.invalidateQueries({ queryKey: ['admin', 'instagram-reels'] });
       setConfirmDelete(null);
-      flash('Farmer deleted');
+      flash('Reel removed');
     },
   });
 
@@ -205,9 +167,9 @@ export function FarmersPage() {
     setSaveError(null);
     setForm({ ...EMPTY_FORM });
   };
-  const openEdit = (f: Farmer) => {
+  const openEdit = (r: Reel) => {
     setSaveError(null);
-    setForm(farmerToForm(f));
+    setForm(reelToForm(r));
   };
 
   return (
@@ -215,20 +177,13 @@ export function FarmersPage() {
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-extrabold text-primary-700">
-            <Sprout size={22} /> Farmers
+            <Instagram size={22} /> Instagram Reels
           </h1>
           <p className="text-sm font-semibold text-secondary-800">
-            {isLoading ? 'Loading…' : `${farmers.length} on file`}
+            {isLoading ? 'Loading…' : `${reels.length} configured`}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <input
-            type="search"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="Search by name, crop, location…"
-            className="w-72 rounded-lg border-2 border-secondary-200 px-4 py-2 font-semibold focus:border-primary-500 focus:outline-none"
-          />
           <button
             onClick={() => refetch()}
             disabled={isFetching}
@@ -241,7 +196,7 @@ export function FarmersPage() {
             onClick={openCreate}
             className="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-3 py-2 text-sm font-bold text-white hover:bg-primary-600"
           >
-            <Plus size={14} /> New farmer
+            <Plus size={14} /> Add reel
           </button>
         </div>
       </div>
@@ -253,16 +208,16 @@ export function FarmersPage() {
       ) : null}
 
       {isLoading ? (
-        <Loading label="Loading farmers…" />
+        <Loading label="Loading reels…" />
       ) : isError ? (
-        <ErrorState message="Couldn't load farmers." />
-      ) : filtered.length === 0 ? (
+        <ErrorState message="Couldn't load reels." />
+      ) : reels.length === 0 ? (
         <div className="rounded-xl border border-secondary-200 bg-white px-6 py-12 text-center">
-          <Sprout size={40} className="mx-auto text-secondary-300" />
+          <Instagram size={40} className="mx-auto text-secondary-300" />
           <p className="mt-2 font-semibold text-secondary-800">
-            {query.trim()
-              ? `No farmers matched "${query.trim()}".`
-              : 'No farmers yet. Add one to feature it on the shop\'s "Meet Today\'s Farmer" card.'}
+            No reels yet. Add one and the website shows a "Follow us on
+            Instagram" section with it — remove them all and the section
+            disappears again.
           </p>
         </div>
       ) : (
@@ -270,88 +225,82 @@ export function FarmersPage() {
           <table className="w-full text-sm">
             <thead className="bg-primary-600 text-white">
               <tr>
-                <th className="px-4 py-3 text-left font-bold">Farmer</th>
-                <th className="px-4 py-3 text-left font-bold">Location</th>
-                <th className="px-4 py-3 text-left font-bold">Crop</th>
+                <th className="px-4 py-3 text-left font-bold">Reel</th>
                 <th className="px-4 py-3 text-right font-bold">Order</th>
                 <th className="px-4 py-3 text-left font-bold">Status</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
-              {filtered.map(f => (
+              {reels.map(r => (
                 <tr
-                  key={f.id}
+                  key={r.id}
                   className="border-t border-secondary-100 hover:bg-primary-50"
                 >
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="font-bold text-gray-900">{f.name}</div>
-                      {f.isTodaysFarmer === 1 ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-bold uppercase text-primary-700">
-                          <Star size={10} className="fill-current" /> Today
-                        </span>
-                      ) : null}
+                    <div className="font-bold text-gray-900">
+                      {r.caption || `Reel ${reelCode(r.reelUrl)}`}
                     </div>
-                    {f.storyShort ? (
-                      <div className="mt-0.5 line-clamp-1 text-xs text-secondary-700">
-                        {f.storyShort}
-                      </div>
-                    ) : null}
+                    <a
+                      href={r.reelUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-0.5 inline-flex items-center gap-1 text-xs font-semibold text-primary-700 hover:underline"
+                    >
+                      <ExternalLink size={11} /> {r.reelUrl}
+                    </a>
                   </td>
-                  <td className="px-4 py-3 text-gray-800">{f.location || '—'}</td>
-                  <td className="px-4 py-3 text-gray-800">{f.cropSpecialty || '—'}</td>
                   <td className="px-4 py-3 text-right font-bold text-gray-900">
-                    {f.sortOrder}
+                    {r.sortOrder}
                   </td>
                   <td className="px-4 py-3">
-                    {f.isActive === 1 ? (
-                      <span className="rounded-full bg-success-soft px-3 py-1 text-xs font-bold text-success">
-                        Active
-                      </span>
-                    ) : (
-                      <span className="rounded-full bg-secondary-100 px-3 py-1 text-xs font-bold text-secondary-800">
-                        Hidden
-                      </span>
-                    )}
+                    <div className="flex flex-wrap gap-1">
+                      {r.isActive === 1 ? (
+                        <span className="rounded-full bg-success-soft px-3 py-1 text-xs font-bold text-success">
+                          Showing
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-secondary-100 px-3 py-1 text-xs font-bold text-secondary-800">
+                          Hidden
+                        </span>
+                      )}
+                      {r.videoUrl ? (
+                        <span className="rounded-full bg-primary-50 px-3 py-1 text-xs font-bold text-primary-700">
+                          Plays in site
+                        </span>
+                      ) : (
+                        <span
+                          className="rounded-full bg-warning-soft px-3 py-1 text-xs font-bold text-warning"
+                          title="No video uploaded — the site uses Instagram's embed, which stops after one play"
+                        >
+                          Embed only
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1">
                       <button
-                        onClick={() => openEdit(f)}
+                        onClick={() => openEdit(r)}
                         className="rounded-lg px-2 py-1 text-xs font-bold text-primary-700 hover:bg-primary-50"
                       >
                         <Edit2 size={12} className="inline" /> Edit
                       </button>
-                      {f.isTodaysFarmer !== 1 ? (
-                        <button
-                          onClick={() => todaysMut.mutate(f.id)}
-                          disabled={todaysMut.isPending || f.isActive !== 1}
-                          title={
-                            f.isActive !== 1
-                              ? 'Farmer must be Active before being featured'
-                              : 'Feature as Today\'s Farmer'
-                          }
-                          className="rounded-lg px-2 py-1 text-xs font-bold text-primary-700 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          <Award size={12} className="inline" /> Set as Today
-                        </button>
-                      ) : null}
                       <button
                         onClick={() =>
-                          toggleActiveMut.mutate({
-                            id: f.id,
-                            next: f.isActive === 1 ? 0 : 1,
+                          toggleMut.mutate({
+                            id: r.id,
+                            next: r.isActive === 1 ? 0 : 1,
                           })
                         }
-                        disabled={toggleActiveMut.isPending}
+                        disabled={toggleMut.isPending}
                         className={`rounded-lg px-2 py-1 text-xs font-bold ${
-                          f.isActive === 1
+                          r.isActive === 1
                             ? 'text-secondary-800 hover:bg-secondary-100'
                             : 'text-success hover:bg-success-soft'
                         } disabled:opacity-50`}
                       >
-                        {f.isActive === 1 ? (
+                        {r.isActive === 1 ? (
                           <>
                             <EyeOff size={12} className="inline" /> Hide
                           </>
@@ -362,7 +311,7 @@ export function FarmersPage() {
                         )}
                       </button>
                       <button
-                        onClick={() => setConfirmDelete(f)}
+                        onClick={() => setConfirmDelete(r)}
                         className="rounded-lg px-2 py-1 text-xs font-bold text-danger hover:bg-danger-soft"
                       >
                         <Trash2 size={12} className="inline" /> Delete
@@ -377,7 +326,7 @@ export function FarmersPage() {
       )}
 
       {form ? (
-        <FarmerFormModal
+        <ReelFormModal
           value={form}
           onChange={v => {
             setForm(v);
@@ -392,7 +341,7 @@ export function FarmersPage() {
 
       {confirmDelete ? (
         <ConfirmDelete
-          farmer={confirmDelete}
+          reel={confirmDelete}
           submitting={deleteMut.isPending}
           onCancel={() => setConfirmDelete(null)}
           onConfirm={() => deleteMut.mutate(confirmDelete.id)}
@@ -404,7 +353,7 @@ export function FarmersPage() {
 
 // ─── Form modal ───────────────────────────────────────────────────
 
-function FarmerFormModal({
+function ReelFormModal({
   value,
   onChange,
   onCancel,
@@ -422,103 +371,128 @@ function FarmerFormModal({
   const isEdit = value.id > 0;
   const set = (patch: Partial<FormValues>) => onChange({ ...value, ...patch });
 
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const uploadVideo = async (file: File) => {
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const r = await api.post<{ path: string; url: string }>(
+        '/api/admin/instagram-reels/upload-video',
+        form,
+        // Big files stream slowly — don't let the default 15s timeout
+        // kill a legitimate upload.
+        { timeout: 300_000 },
+      );
+      set({ videoUrl: r.data.path, videoPreview: r.data.url });
+    } catch (err: any) {
+      setUploadError(
+        err?.response?.data?.message ?? err?.message ?? 'Upload failed.',
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!value.name.trim()) return;
+    if (!value.reelUrl.trim() || uploading) return;
     onSubmit(value);
   };
 
   return (
     <ModalShell
-      title={isEdit ? `Edit ${value.name || 'farmer'}` : 'New farmer'}
+      title={isEdit ? 'Edit reel' : 'Add reel'}
       onCancel={onCancel}
     >
       <form onSubmit={submit} className="space-y-4">
-        <Field label="Name" required>
+        <Field label="Reel link" required>
           <input
-            type="text"
-            value={value.name}
-            onChange={e => set({ name: e.target.value })}
+            type="url"
+            value={value.reelUrl}
+            onChange={e => set({ reelUrl: e.target.value })}
             className={inputCls}
-            placeholder="Ramesh Garu"
-            maxLength={120}
+            placeholder="https://www.instagram.com/reel/ABC123xyz/"
+            maxLength={500}
             required
             autoFocus
             disabled={submitting}
           />
+          <p className={hintCls}>
+            On the reel, tap Share → Copy link and paste it here.
+          </p>
         </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Location">
-            <input
-              type="text"
-              value={value.location}
-              onChange={e => set({ location: e.target.value })}
-              className={inputCls}
-              placeholder="Nizamabad"
-              maxLength={120}
-              disabled={submitting}
-            />
-          </Field>
-          <Field label="Crop specialty">
-            <input
-              type="text"
-              value={value.cropSpecialty}
-              onChange={e => set({ cropSpecialty: e.target.value })}
-              className={inputCls}
-              placeholder="Sona Masoori"
-              maxLength={120}
-              disabled={submitting}
-            />
-          </Field>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Years farming">
-            <input
-              type="number"
-              min={0}
-              value={value.yearsFarming}
-              onChange={e => set({ yearsFarming: e.target.value })}
-              className={inputCls}
-              placeholder="12"
-              disabled={submitting}
-            />
-          </Field>
-          <Field label="Harvested — days ago">
-            <input
-              type="number"
-              min={0}
-              value={value.harvestedDaysAgo}
-              onChange={e => set({ harvestedDaysAgo: e.target.value })}
-              className={inputCls}
-              placeholder="3"
-              disabled={submitting}
-            />
-            <p className={hintCls}>
-              Drives the "Harvested N days ago" line on the shop overlay.
-            </p>
-          </Field>
-        </div>
-        <Field label="Short bio (for the overlay + cards)">
-          <textarea
-            value={value.storyShort}
-            onChange={e => set({ storyShort: e.target.value })}
-            className={inputCls + ' h-20 resize-none'}
-            placeholder="One or two lines · plain text · max 500 chars"
-            maxLength={500}
-            disabled={submitting}
-          />
-        </Field>
-        <Field label="Full story (for /farmers/:id detail page)">
-          <textarea
-            value={value.storyFull}
-            onChange={e => set({ storyFull: e.target.value })}
-            className={inputCls + ' h-40 font-mono text-xs'}
-            placeholder={'<p>Rich text — accepts HTML tags:</p>\n<p><b>Bold</b>, <i>italic</i>, <ul><li>lists</li></ul>, <a href="#">links</a>.</p>'}
+        <Field label="Label (optional)">
+          <input
+            type="text"
+            value={value.caption}
+            onChange={e => set({ caption: e.target.value })}
+            className={inputCls}
+            placeholder="e.g. Ragi harvest video"
+            maxLength={255}
             disabled={submitting}
           />
           <p className={hintCls}>
-            Rich-text HTML. Rendered on the shop's farmer detail page. A visual
-            editor is a follow-up — for now, paste HTML directly.
+            Only shown in this list so you can tell reels apart — the
+            website shows Instagram's own caption.
+          </p>
+        </Field>
+        <Field label="Video file (recommended)">
+          {value.videoUrl ? (
+            <div className="flex items-center gap-3 rounded-lg border-2 border-secondary-200 p-3">
+              {value.videoPreview ? (
+                <video
+                  src={value.videoPreview}
+                  className="h-24 w-14 rounded-md object-cover"
+                  muted
+                  playsInline
+                  preload="metadata"
+                />
+              ) : null}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-bold text-success">
+                  ✓ Video attached — plays inside the website
+                </p>
+                <p className="truncate text-xs text-secondary-700">{value.videoUrl}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => set({ videoUrl: '', videoPreview: '' })}
+                disabled={submitting || uploading}
+                className="rounded-lg px-2 py-1 text-xs font-bold text-danger hover:bg-danger-soft"
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <input
+              type="file"
+              accept="video/mp4,video/quicktime,video/webm,.mp4,.m4v,.mov,.webm"
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (f) uploadVideo(f);
+                e.target.value = '';
+              }}
+              className="w-full rounded-lg border-2 border-secondary-200 px-4 py-2.5 font-semibold file:mr-3 file:rounded-lg file:border-0 file:bg-primary-50 file:px-3 file:py-1.5 file:font-bold file:text-primary-700 disabled:opacity-60"
+              disabled={submitting || uploading}
+            />
+          )}
+          {uploading ? (
+            <p className="mt-1 flex items-center gap-2 text-xs font-bold text-primary-700">
+              <Loader2 className="animate-spin" size={12} /> Uploading video…
+            </p>
+          ) : null}
+          {uploadError ? (
+            <p className="mt-1 text-xs font-bold text-danger">{uploadError}</p>
+          ) : null}
+          <p className={hintCls}>
+            Upload the same video you posted as the reel (MP4, max 100 MB).
+            With a video, it plays and repeats inside the website. Without
+            one, Instagram's player is used — it stops after one play and
+            shows "Watch again on Instagram".
           </p>
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -530,7 +504,7 @@ function FarmerFormModal({
               className={inputCls}
               disabled={submitting}
             />
-            <p className={hintCls}>Lower numbers sort first on the shop.</p>
+            <p className={hintCls}>Lower numbers sort first.</p>
           </Field>
           <Field label="Status">
             <select
@@ -539,7 +513,7 @@ function FarmerFormModal({
               className={inputCls}
               disabled={submitting}
             >
-              <option value={1}>Active</option>
+              <option value={1}>Showing</option>
               <option value={0}>Hidden</option>
             </select>
           </Field>
@@ -553,9 +527,9 @@ function FarmerFormModal({
 
         <ModalActions
           submitting={submitting}
-          submitLabel={isEdit ? 'Save changes' : 'Create farmer'}
+          submitLabel={isEdit ? 'Save changes' : 'Add reel'}
           onCancel={onCancel}
-          disabled={!value.name.trim()}
+          disabled={!value.reelUrl.trim() || uploading}
         />
       </form>
     </ModalShell>
@@ -563,20 +537,21 @@ function FarmerFormModal({
 }
 
 function ConfirmDelete({
-  farmer,
+  reel,
   submitting,
   onCancel,
   onConfirm,
 }: {
-  farmer: Farmer;
+  reel: Reel;
   submitting: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   return (
-    <ModalShell title="Delete this farmer?" onCancel={onCancel}>
+    <ModalShell title="Remove this reel?" onCancel={onCancel}>
       <p className="text-sm text-gray-800">
-        <b>{farmer.name}</b> will be permanently removed.
+        <b>{reel.caption || reelCode(reel.reelUrl)}</b> will be removed from
+        the website's Instagram section.
       </p>
       <p className="mt-2 text-xs text-secondary-800">
         Tip: <b>Hide</b> is reversible; delete is not.
@@ -623,7 +598,7 @@ function ModalShell({
       onClick={onCancel}
     >
       <div
-        className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-2xl"
+        className="w-full max-w-xl rounded-xl bg-white p-6 shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">

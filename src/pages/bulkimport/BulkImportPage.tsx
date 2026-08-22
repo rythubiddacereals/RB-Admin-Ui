@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -6,7 +7,6 @@ import {
   Download,
   File as FileIcon,
   FileSpreadsheet,
-  FileArchive,
   Info,
   Loader2,
   Upload,
@@ -15,20 +15,18 @@ import {
 import { api, getStoredToken } from '@/lib/api';
 
 /**
- * Bulk product import — Excel file + ZIP of images. Wraps the
- * legacy BulkProductImportService via /api/admin/products/bulk-import
- * so we get identical parsing / validation to the old Thymeleaf form
- * without duplicating any of that logic in JS.
+ * Bulk product import — Excel only, kept deliberately simple:
+ * download the generated template → fill one row per product →
+ * upload here → attach photos on the Attach Images screen.
  *
- * Client-side checks mirror the backend's (extension + ZIP size
- * ceiling) so a bad file is caught before uploading.
+ * The old ZIP-of-images flow (filename matching) was removed —
+ * it was the main source of confusion and failed imports.
  *
- * The mutation uses a longer axios timeout — big Excel + ZIP
- * combos can take a minute or more on the backend, and the
- * default 15 s would false-fail those.
+ * The mutation uses a longer axios timeout — big sheets can take
+ * a minute or more to parse server-side, and the default 15 s
+ * would false-fail those.
  */
 
-const MAX_ZIP_BYTES = 100 * 1024 * 1024;
 
 interface ImportResult {
   totalRecords: number;
@@ -51,46 +49,33 @@ function isExcelFile(name: string): boolean {
   return n.endsWith('.xlsx') || n.endsWith('.xls');
 }
 
-function isZipFile(name: string): boolean {
-  return name.toLowerCase().endsWith('.zip');
-}
-
 export function BulkImportPage() {
   const qc = useQueryClient();
   const [excelFile, setExcelFile] = useState<File | null>(null);
-  const [zipFile, setZipFile] = useState<File | null>(null);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const excelInputRef = useRef<HTMLInputElement>(null);
-  const zipInputRef = useRef<HTMLInputElement>(null);
 
   const clientError = useMemo(() => {
     if (excelFile && !isExcelFile(excelFile.name)) {
       return 'Excel file must be .xlsx or .xls format.';
     }
-    if (zipFile && !isZipFile(zipFile.name)) {
-      return 'Image file must be .zip format.';
-    }
-    if (zipFile && zipFile.size > MAX_ZIP_BYTES) {
-      return `Image ZIP is ${humanSize(zipFile.size)} — max is 100 MB.`;
-    }
     return null;
-  }, [excelFile, zipFile]);
+  }, [excelFile]);
 
-  const canUpload = !!excelFile && !!zipFile && !clientError;
+  const canUpload = !!excelFile && !clientError;
 
   const uploadMut = useMutation({
     mutationFn: async () => {
-      if (!excelFile || !zipFile) throw new Error('Files required');
+      if (!excelFile) throw new Error('Excel file required');
       const form = new FormData();
       form.append('excelFile', excelFile);
-      form.append('imageZipFile', zipFile);
       setProgress(0);
       setResult(null);
       setError(null);
-      // Upload can take a while for big ZIPs — override the shared
-      // 15s axios timeout so the request survives a slow parse.
+      // Big sheets can take a while to parse server-side — override
+      // the shared 15s axios timeout.
       const r = await api.post<ImportResult>(
         '/api/admin/products/bulk-import',
         form,
@@ -129,12 +114,10 @@ export function BulkImportPage() {
 
   const reset = () => {
     setExcelFile(null);
-    setZipFile(null);
     setResult(null);
     setError(null);
     setProgress(0);
     if (excelInputRef.current) excelInputRef.current.value = '';
-    if (zipInputRef.current) zipInputRef.current.value = '';
   };
 
   return (
@@ -144,16 +127,19 @@ export function BulkImportPage() {
           <Upload size={22} /> Bulk Import Product
         </h1>
         <p className="mt-1 text-sm font-semibold text-secondary-800">
-          Upload an Excel file with product rows plus a ZIP of the images
-          they reference. The importer validates every row and returns a
-          summary — nothing is committed to the shop until you see it here.
+          Two simple steps: upload the filled Excel sheet here, then add
+          product photos on the{' '}
+          <Link to="/bulk-import/images" className="text-primary-600 underline">
+            Attach Images
+          </Link>{' '}
+          screen by drag and drop.
         </p>
       </div>
 
       <TemplateCard />
 
       <div className="rounded-xl border border-secondary-200 bg-white p-5 shadow-sm">
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="mx-auto max-w-xl">
           <FilePicker
             inputRef={excelInputRef}
             label="Product spreadsheet"
@@ -163,16 +149,6 @@ export function BulkImportPage() {
             file={excelFile}
             disabled={uploadMut.isPending}
             onChange={setExcelFile}
-          />
-          <FilePicker
-            inputRef={zipInputRef}
-            label="Product images"
-            hint="ZIP archive containing every image the spreadsheet points at. Max 100 MB."
-            accept=".zip"
-            icon={<FileArchive size={24} className="text-primary-600" />}
-            file={zipFile}
-            disabled={uploadMut.isPending}
-            onChange={setZipFile}
           />
         </div>
 
@@ -230,6 +206,23 @@ export function BulkImportPage() {
       ) : null}
 
       {result ? <ResultCard result={result} /> : null}
+
+      {/* The natural next step after a successful Excel-only import:
+          give the new products their photos. */}
+      {result && result.successfulRecords > 0 ? (
+        <div className="flex items-center justify-between rounded-xl border border-primary-200 bg-primary-50 px-5 py-4">
+          <p className="text-sm font-bold text-primary-800">
+            {result.successfulRecords} product{result.successfulRecords === 1 ? '' : 's'} imported.
+            Add their photos now — click a product, pick an image, done.
+          </p>
+          <Link
+            to="/bulk-import/images"
+            className="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-bold text-white hover:bg-primary-600"
+          >
+            Attach Images →
+          </Link>
+        </div>
+      ) : null}
     </div>
   );
 }

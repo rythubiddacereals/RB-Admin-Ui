@@ -18,10 +18,12 @@ import { CustomersListPage } from '@/pages/customers/CustomersList';
 import { CustomerDetailPage } from '@/pages/customers/CustomerDetail';
 import { DeliveryCentersPage } from '@/pages/delivery/DeliveryCentersPage';
 import { ShippingRulesPage } from '@/pages/shipping/ShippingRulesPage';
+import { AttachImagesPage } from '@/pages/bulkimport/AttachImagesPage';
 import { MyDeliveriesPage } from '@/pages/deliveries/MyDeliveriesPage';
 import { QuantityOptionsPage } from '@/pages/quantityoptions/QuantityOptionsPage';
 import { SupportUsersPage } from '@/pages/supportusers/SupportUsersPage';
 import { BannersPage } from '@/pages/content/BannersPage';
+import { InstagramReelsPage } from '@/pages/content/InstagramReelsPage';
 import { FarmersPage } from '@/pages/farmers/FarmersPage';
 import { TodaysDealsPage } from '@/pages/todaysdeals/TodaysDealsPage';
 import { ReviewsPage } from '@/pages/reviews/ReviewsPage';
@@ -90,12 +92,14 @@ export default function App() {
         <Route path="quantity-options" element={<QuantityOptionsPage />} />
         <Route path="support-users" element={<SupportUsersPage />} />
         <Route path="banners" element={<BannersPage />} />
+        <Route path="instagram-reels" element={<InstagramReelsPage />} />
         <Route path="farmers" element={<FarmersPage />} />
         <Route path="todays-deals" element={<TodaysDealsPage />} />
         <Route path="reviews" element={<ReviewsPage />} />
         <Route path="gallery" element={<GalleryPage />} />
         <Route path="videos" element={<VideosPage />} />
         <Route path="bulk-import" element={<BulkImportPage />} />
+        <Route path="bulk-import/images" element={<AttachImagesPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
