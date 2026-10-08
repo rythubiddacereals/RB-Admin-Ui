@@ -376,11 +376,13 @@ function CreateUserModal({
       ),
   });
 
+  // Delivery agents get called about deliveries — phone is mandatory for them too.
+  const deliverySelected = roles.includes('DELIVERY_AGENT');
   const invalid =
     !username.trim() ||
     password.length < 4 ||
-    roles.length === 0 ||
-    (superSelected && phone.trim().length !== 10);
+    roles.length !== 1 ||
+    ((superSelected || deliverySelected) && phone.trim().length !== 10);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -397,6 +399,7 @@ function CreateUserModal({
             value={username}
             onChange={e => setUsername(e.target.value)}
             className={inputCls}
+            autoComplete="off"
             placeholder="e.g. rajesh.k"
             maxLength={60}
             required
@@ -410,13 +413,14 @@ function CreateUserModal({
             value={password}
             onChange={e => setPassword(e.target.value)}
             className={inputCls}
+            autoComplete="new-password"
             placeholder="At least 4 characters"
             required
             minLength={4}
             disabled={mut.isPending}
           />
         </Field>
-        <Field label="Roles" required>
+        <Field label="Role" required>
           <RolesPicker
             value={roles}
             onChange={setRoles}
@@ -427,7 +431,10 @@ function CreateUserModal({
 
         {/* OTP destination — the whole point of a super admin is the
             second factor, so the number is mandatory for that role. */}
-        <Field label={superSelected ? 'Phone (login OTP)' : 'Phone (optional)'} required={superSelected}>
+        <Field
+          label={superSelected ? 'Phone (login OTP)' : deliverySelected ? 'Phone (delivery contact)' : 'Phone (optional)'}
+          required={superSelected || deliverySelected}
+        >
           <input
             type="tel"
             inputMode="numeric"
@@ -436,6 +443,7 @@ function CreateUserModal({
             onChange={e => setPhone(e.target.value.replace(/\D/g, ''))}
             className={inputCls}
             placeholder="10-digit mobile number"
+            autoComplete="off"
             disabled={mut.isPending}
           />
           {superSelected ? (
@@ -510,10 +518,11 @@ function EditUserModal({
       ),
   });
 
+  const deliverySelected = roles.includes('DELIVERY_AGENT');
   const disabled =
     !username.trim() ||
-    roles.length === 0 ||
-    (superSelected && phone.trim().length !== 10) ||
+    roles.length !== 1 ||
+    ((superSelected || deliverySelected) && phone.trim().length !== 10) ||
     // Typed something too short to be a valid password — block rather
     // than silently keeping the old one.
     (!superSelected && password.length > 0 && password.length < 4);
@@ -539,7 +548,7 @@ function EditUserModal({
             disabled={mut.isPending}
           />
         </Field>
-        <Field label="Roles" required>
+        <Field label="Role" required>
           <RolesPicker
             value={roles}
             onChange={setRoles}
@@ -548,7 +557,10 @@ function EditUserModal({
           />
         </Field>
 
-        <Field label={superSelected ? 'Phone (login OTP)' : 'Phone (optional)'} required={superSelected}>
+        <Field
+          label={superSelected ? 'Phone (login OTP)' : deliverySelected ? 'Phone (delivery contact)' : 'Phone (optional)'}
+          required={superSelected || deliverySelected}
+        >
           <input
             type="tel"
             inputMode="numeric"
@@ -557,6 +569,7 @@ function EditUserModal({
             onChange={e => setPhone(e.target.value.replace(/\D/g, ''))}
             className={inputCls}
             placeholder="10-digit mobile number"
+            autoComplete="off"
             disabled={mut.isPending}
           />
           {superSelected ? (
@@ -713,17 +726,20 @@ function RolesPicker({
   /** Only super admins see (or can grant) the SUPER_ADMIN option. */
   includeSuperAdmin?: boolean;
 }) {
+  // Single role per user: picking one replaces whatever was selected.
   const toggle = (role: string) => {
-    if (value.includes(role)) {
-      onChange(value.filter(r => r !== role));
-    } else {
-      onChange([...value, role]);
-    }
+    onChange([role]);
   };
   const options = includeSuperAdmin
     ? [SUPER_ADMIN_OPTION, ...ROLE_OPTIONS]
     : ROLE_OPTIONS;
   return (
+    <>
+    {value.length > 1 ? (
+      <p className="mb-2 rounded-lg bg-warning-soft px-3 py-2 text-xs font-bold text-warning">
+        This user has more than one role from before. Pick the single role they should keep.
+      </p>
+    ) : null}
     <div className="grid gap-2 sm:grid-cols-2">
       {options.map(o => {
         const on = value.includes(o.value);
@@ -740,7 +756,8 @@ function RolesPicker({
             } disabled:opacity-60`}
           >
             <input
-              type="checkbox"
+              type="radio"
+              name="support-user-role"
               checked={on}
               onChange={() => toggle(o.value)}
               onClick={e => e.stopPropagation()}
@@ -757,6 +774,7 @@ function RolesPicker({
         );
       })}
     </div>
+    </>
   );
 }
 

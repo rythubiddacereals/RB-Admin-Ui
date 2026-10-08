@@ -424,7 +424,7 @@ function FarmerFormModal({
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!value.name.trim()) return;
+    if (!value.name.trim() || !value.location.trim() || !value.cropSpecialty.trim()) return;
     onSubmit(value);
   };
 
@@ -448,7 +448,7 @@ function FarmerFormModal({
           />
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Location">
+          <Field label="Location" required>
             <input
               type="text"
               value={value.location}
@@ -456,10 +456,11 @@ function FarmerFormModal({
               className={inputCls}
               placeholder="Nizamabad"
               maxLength={120}
+              required
               disabled={submitting}
             />
           </Field>
-          <Field label="Crop specialty">
+          <Field label="Crop specialty" required>
             <input
               type="text"
               value={value.cropSpecialty}
@@ -467,6 +468,7 @@ function FarmerFormModal({
               className={inputCls}
               placeholder="Sona Masoori"
               maxLength={120}
+              required
               disabled={submitting}
             />
           </Field>

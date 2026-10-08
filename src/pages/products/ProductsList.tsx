@@ -30,10 +30,16 @@ interface ProductRow {
   specialPrice: number;
   mainCategoryName: string;
   subCategoryName: string;
+  /** Ids behind the two names (0 when the product has no category / no sub-category). */
+  mainCategoryId: number;
+  subCategoryId: number;
   outOfStock: number;
   bestSeller: number;
   newArrival: number;
   smFeatured: number;
+  /** 1 = hidden from the shop. Present in every row; only rows with
+   *  hide=1 are included when "Show hidden" is on. */
+  hide: number;
   // Populated from the qty options on the server. `startingFromPrice`
   // is what the shop customer sees on the first variant slot; the
   // card falls back to Product.price only when there are no variants.
@@ -41,6 +47,12 @@ interface ProductRow {
   startingFromPrice: number;
   startingFromMrp: number;
   startingFromLabel: string;
+}
+
+interface CategoryRow {
+  id: number;
+  parentCategoryId: number;
+  name: string;
 }
 
 interface ProductsResponse {
@@ -84,57 +96,122 @@ function displayPrice(p: ProductRow): {
 }
 
 export function ProductsListPage() {
+  // ONE list for everything: the page always loads every product (visible,
+  // hidden, out of stock) so the search bar finds a product whatever state
+  // it is in. The Status dropdown narrows it afterwards.
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['admin', 'products'],
+    queryKey: ['admin', 'products', 'all-states'],
     queryFn: async () => {
-      const r = await api.get<ProductsResponse>('/api/admin/products');
+      const r = await api.get<ProductsResponse>('/api/admin/products?includeHidden=1');
       return r.data;
     },
+  });
+  // Category tree for the two pickers (parent first, then its children).
+  const categoriesQuery = useQuery({
+    queryKey: ['admin', 'categories'],
+    queryFn: async () =>
+      (await api.get<{ categories: CategoryRow[] }>('/api/admin/categories')).data,
   });
 
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
+  const [status, setStatus] = useState<'all' | 'visible' | 'hidden' | 'oos'>('all');
+  // 0 = all. The sub-category list only shows children of the chosen parent.
+  const [parentId, setParentId] = useState(0);
+  const [subId, setSubId] = useState(0);
+
+  const parentOptions = useMemo(
+    () =>
+      (categoriesQuery.data?.categories ?? [])
+        .filter(c => !c.parentCategoryId)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [categoriesQuery.data],
+  );
+  const subOptions = useMemo(
+    () =>
+      parentId > 0
+        ? (categoriesQuery.data?.categories ?? [])
+            .filter(c => c.parentCategoryId === parentId)
+            .sort((a, b) => a.name.localeCompare(b.name))
+        : [],
+    [categoriesQuery.data, parentId],
+  );
 
   const filtered = useMemo(() => {
-    const all = data?.products ?? [];
-    if (!query.trim()) return all;
-    const needle = query.trim().toLowerCase();
-    return all.filter(
-      p =>
-        p.name.toLowerCase().includes(needle) ||
-        p.sku.toLowerCase().includes(needle) ||
-        p.mainCategoryName.toLowerCase().includes(needle) ||
-        p.subCategoryName.toLowerCase().includes(needle),
+    let all = data?.products ?? [];
+    // "Visible in shop" = what a customer can actually buy right now:
+    // not hidden AND in stock (tester: out-of-stock Jeera Rice and hidden
+    // Brown Rice were showing up under the positive filters).
+    if (status === 'visible') all = all.filter(p => p.hide !== 1 && p.outOfStock !== 1);
+    else if (status === 'hidden') all = all.filter(p => p.hide === 1);
+    else if (status === 'oos') all = all.filter(p => p.outOfStock === 1);
+    if (subId > 0) all = all.filter(p => p.subCategoryId === subId);
+    else if (parentId > 0) all = all.filter(p => p.mainCategoryId === parentId);
+    if (query.trim()) {
+      const needle = query.trim().toLowerCase();
+      all = all.filter(
+        p =>
+          p.name.toLowerCase().includes(needle) ||
+          p.sku.toLowerCase().includes(needle) ||
+          p.mainCategoryName.toLowerCase().includes(needle) ||
+          p.subCategoryName.toLowerCase().includes(needle),
+      );
+    }
+    // Category-wise order: parent category, then sub-category, then name -
+    // so every product sits with the rest of its category.
+    const main = (p: ProductRow) => (p.mainCategoryName || '').trim();
+    const sub = (p: ProductRow) => (p.subCategoryName || '').trim();
+    return [...all].sort(
+      (a, b) =>
+        // products with no category go last
+        Number(!main(a)) - Number(!main(b)) ||
+        main(a).localeCompare(main(b)) ||
+        sub(a).localeCompare(sub(b)) ||
+        a.name.localeCompare(b.name),
     );
-  }, [data, query]);
+  }, [data, query, status, parentId, subId]);
+
+  const categoryKey = (p: ProductRow) =>
+    `${(p.mainCategoryName || '').trim()}|${(p.subCategoryName || '').trim()}`;
+  const categoryLabel = (p: ProductRow) => {
+    const m = (p.mainCategoryName || '').trim();
+    const s = (p.subCategoryName || '').trim();
+    if (!m) return 'No category';
+    return s ? `${m} › ${s}` : m;
+  };
+  // How many products each category holds in the current result (all pages).
+  const categoryTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const p of filtered) totals.set(categoryKey(p), (totals.get(categoryKey(p)) ?? 0) + 1);
+    return totals;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const start = (currentPage - 1) * PAGE_SIZE;
   const visible = filtered.slice(start, start + PAGE_SIZE);
+  // The page's products split into consecutive category sections.
+  const visibleGroups: { key: string; label: string; items: ProductRow[] }[] = [];
+  for (const p of visible) {
+    const key = categoryKey(p);
+    const last = visibleGroups[visibleGroups.length - 1];
+    if (last && last.key === key) last.items.push(p);
+    else visibleGroups.push({ key, label: categoryLabel(p), items: [p] });
+  }
 
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-extrabold text-primary-700">Products</h1>
           <p className="text-sm font-semibold text-secondary-800">
             {isLoading
               ? 'Loading…'
-              : `${filtered.length} products${query ? ` matching "${query}"` : ''}`}
+              : `${filtered.length} of ${data?.products.length ?? 0} products${query ? ` matching "${query}"` : ''}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <input
-            type="search"
-            value={query}
-            onChange={e => {
-              setQuery(e.target.value);
-              setPage(1);
-            }}
-            placeholder="Search by name, SKU, or category…"
-            className="w-72 rounded-lg border-2 border-secondary-200 px-4 py-2 font-semibold focus:border-primary-500 focus:outline-none"
-          />
           <button
             onClick={() => refetch()}
             disabled={isFetching}
@@ -151,6 +228,89 @@ export function ProductsListPage() {
             New product
           </Link>
         </div>
+      </div>
+
+      {/* One search + filters bar. Search covers EVERY product (hidden, out of
+          stock, all categories); the three pickers narrow the result. */}
+      <div className="mb-5 grid gap-2 rounded-xl border border-secondary-200 bg-white p-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <input
+          type="search"
+          value={query}
+          onChange={e => {
+            setQuery(e.target.value);
+            setPage(1);
+          }}
+          placeholder="Search all products by name, SKU, category…"
+          className="rounded-lg border-2 border-secondary-200 px-4 py-2 font-semibold focus:border-primary-500 focus:outline-none"
+        />
+        <select
+          value={parentId}
+          onChange={e => {
+            setParentId(Number(e.target.value));
+            setSubId(0);
+            setPage(1);
+          }}
+          className="rounded-lg border-2 border-secondary-200 px-3 py-2 font-semibold focus:border-primary-500 focus:outline-none"
+          title="Category"
+        >
+          <option value={0}>All categories</option>
+          {parentOptions.map(c => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={subId}
+          onChange={e => {
+            setSubId(Number(e.target.value));
+            setPage(1);
+          }}
+          disabled={parentId <= 0 || subOptions.length === 0}
+          className="rounded-lg border-2 border-secondary-200 px-3 py-2 font-semibold focus:border-primary-500 focus:outline-none disabled:bg-secondary-50 disabled:text-secondary-500"
+          title="Sub-category"
+        >
+          <option value={0}>
+            {parentId <= 0
+              ? 'Select a category first'
+              : subOptions.length === 0
+              ? 'No sub-categories'
+              : 'All sub-categories'}
+          </option>
+          {subOptions.map(c => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={status}
+          onChange={e => {
+            setStatus(e.target.value as typeof status);
+            setPage(1);
+          }}
+          className="rounded-lg border-2 border-secondary-200 px-3 py-2 font-semibold focus:border-primary-500 focus:outline-none"
+          title="Status"
+        >
+          <option value="all">All statuses</option>
+          <option value="visible">Visible in shop (in stock)</option>
+          <option value="hidden">Hidden from shop</option>
+          <option value="oos">Out of stock</option>
+        </select>
+        <button
+          type="button"
+          onClick={() => {
+            setQuery('');
+            setParentId(0);
+            setSubId(0);
+            setStatus('all');
+            setPage(1);
+          }}
+          disabled={!query && parentId === 0 && subId === 0 && status === 'all'}
+          className="rounded-lg border-2 border-secondary-300 px-3 py-2 text-sm font-bold text-gray-800 hover:bg-secondary-50 disabled:opacity-40"
+        >
+          Clear
+        </button>
       </div>
 
       {isLoading ? (
@@ -171,8 +331,18 @@ export function ProductsListPage() {
         </div>
       ) : (
         <>
+          <div className="space-y-8">
+          {visibleGroups.map(group => (
+          <section key={group.key}>
+            <div className="mb-3 flex items-center gap-2 border-b-2 border-primary-100 pb-2">
+              <h2 className="text-lg font-extrabold text-primary-700">{group.label}</h2>
+              <span className="rounded-full bg-primary-50 px-2.5 py-0.5 text-xs font-bold text-primary-700">
+                {categoryTotals.get(group.key) ?? group.items.length} product
+                {(categoryTotals.get(group.key) ?? group.items.length) === 1 ? '' : 's'}
+              </span>
+            </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {visible.map(p => {
+            {group.items.map(p => {
               const price = displayPrice(p);
               const outOfStock = p.outOfStock === 1;
               return (
@@ -200,6 +370,19 @@ export function ProductsListPage() {
                       {p.newArrival === 1 ? (
                         <span className="inline-flex items-center gap-1 rounded-full bg-primary-500 px-2 py-0.5 text-[10px] font-extrabold text-white">
                           <Zap size={10} /> New
+                        </span>
+                      ) : null}
+                      {p.hide === 1 ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-gray-800 px-2 py-0.5 text-[10px] font-extrabold text-white">
+                          HIDDEN
+                        </span>
+                      ) : null}
+                      {!(p.thumbNail && p.thumbNail.trim()) ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-extrabold text-white"
+                          title="The shop lists only products with a main image. Add one under Attach Images."
+                        >
+                          NO PHOTO · NOT IN SHOP
                         </span>
                       ) : null}
                     </div>
@@ -253,6 +436,9 @@ export function ProductsListPage() {
                 </Link>
               );
             })}
+          </div>
+          </section>
+          ))}
           </div>
 
           <div className="mt-6 flex items-center justify-between">

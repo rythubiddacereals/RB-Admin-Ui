@@ -9,12 +9,14 @@ import { ProductDetailPage } from '@/pages/products/ProductDetail';
 import { ProductFormPage } from '@/pages/products/ProductForm';
 import {
   BEST_SELLERS,
+  HIDDEN_PRODUCTS,
   NEW_ARRIVALS,
   OUT_OF_STOCK,
   ProductFlagListPage,
 } from '@/pages/products/ProductFlagList';
 import { CategoriesPage } from '@/pages/categories/CategoriesPage';
 import { CustomersListPage } from '@/pages/customers/CustomersList';
+import { CouponsPage } from '@/pages/coupons/CouponsPage';
 import { CustomerDetailPage } from '@/pages/customers/CustomerDetail';
 import { DeliveryCentersPage } from '@/pages/delivery/DeliveryCentersPage';
 import { ShippingRulesPage } from '@/pages/shipping/ShippingRulesPage';
@@ -83,8 +85,10 @@ export default function App() {
         <Route path="best-sellers" element={<ProductFlagListPage preset={BEST_SELLERS} />} />
         <Route path="new-arrivals" element={<ProductFlagListPage preset={NEW_ARRIVALS} />} />
         <Route path="out-of-stock" element={<ProductFlagListPage preset={OUT_OF_STOCK} />} />
+        <Route path="hidden-products" element={<ProductFlagListPage preset={HIDDEN_PRODUCTS} />} />
         <Route path="categories" element={<CategoriesPage />} />
         <Route path="customers" element={<CustomersListPage />} />
+        <Route path="coupons" element={<CouponsPage />} />
         <Route path="customers/:customerId" element={<CustomerDetailPage />} />
         <Route path="delivery-centers" element={<DeliveryCentersPage />} />
         <Route path="shipping-rules" element={<ShippingRulesPage />} />

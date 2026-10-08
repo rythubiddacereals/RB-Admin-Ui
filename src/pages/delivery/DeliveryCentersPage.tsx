@@ -525,7 +525,8 @@ function CenterFormModal({
       !value.name.trim() ||
       !value.latitude ||
       !value.longitude ||
-      !value.maxRadiusKm
+      !value.maxRadiusKm ||
+      value.perKmRate.trim() === ''
     ) {
       return;
     }
@@ -686,7 +687,7 @@ function CenterFormModal({
             </div>
             <div>
               <label className="mb-1 block text-sm font-bold text-gray-800">
-                Per-km rate (₹)
+                Per-km rate (₹)<span className="text-danger">*</span>
               </label>
               <input
                 type="number"
@@ -695,7 +696,8 @@ function CenterFormModal({
                 value={value.perKmRate}
                 onChange={e => set({ perKmRate: e.target.value })}
                 className="w-full rounded-lg border-2 border-secondary-200 px-4 py-2.5 font-semibold focus:border-primary-500 focus:outline-none"
-                placeholder="leave blank for global rate"
+                placeholder="e.g. 10"
+                required
                 disabled={submitting}
               />
               <p className="mt-1 text-xs text-secondary-700">

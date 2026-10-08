@@ -102,7 +102,7 @@ export function DashboardPage() {
               value={String(data.today.orderCount)}
               icon={<ShoppingCart size={22} />}
               accent="primary"
-              href="/orders"
+              href="/orders?date=today"
             />
             <KpiTile
               label="Today's revenue"
@@ -118,14 +118,14 @@ export function DashboardPage() {
               value={String(data.pending.count)}
               icon={<Truck size={22} />}
               accent={data.pending.count > 10 ? 'warning' : 'primary'}
-              href="/orders"
+              href="/orders?status=PENDING"
             />
             <KpiTile
               label="Out of stock"
               value={String(data.products.outOfStock)}
               icon={<AlertTriangle size={22} />}
               accent={data.products.outOfStock > 0 ? 'danger' : 'success'}
-              href="/products"
+              href="/out-of-stock"
             />
           </div>
 
@@ -362,7 +362,13 @@ function StatusBreakdown({ byStatus }: { byStatus: Record<string, number> }) {
         const pct = total > 0 ? Math.round((count / total) * 100) : 0;
         return (
           <li key={status} className="px-4 py-3">
-            <div className="mb-1 flex items-center justify-between text-sm">
+            {/* Each status row deep-links to the orders list filtered to
+                that status — previously these were plain text. */}
+            <Link
+              to={`/orders?status=${encodeURIComponent(status)}`}
+              className="mb-1 flex items-center justify-between text-sm hover:opacity-80"
+              title={`Show ${status} orders`}
+            >
               <span
                 className={`rounded-full px-2 py-0.5 text-xs font-bold ${badgeClass(
                   status,
@@ -371,7 +377,7 @@ function StatusBreakdown({ byStatus }: { byStatus: Record<string, number> }) {
                 {status}
               </span>
               <span className="font-bold text-gray-900">{count}</span>
-            </div>
+            </Link>
             <div className="h-2 w-full overflow-hidden rounded-full bg-secondary-100">
               <div
                 className="h-full rounded-full bg-primary-500"

@@ -10,6 +10,7 @@ interface QtyOption {
   price: number;
   marketPrice: number;
   displayOrder: number;
+  hidden?: number;
 }
 
 interface ProductDetail {
@@ -235,6 +236,11 @@ export function ProductDetailPage() {
                     <td className="px-4 py-3 text-gray-700">{q.displayOrder}</td>
                     <td className="px-4 py-3 font-bold text-gray-900">
                       {q.name || '—'}
+                      {q.hidden === 1 ? (
+                        <span className="ml-2 rounded-full bg-secondary-100 px-2 py-0.5 text-[10px] font-bold text-secondary-800">
+                          Hidden from shop
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 text-gray-800">{q.type || '—'}</td>
                     <td className="px-4 py-3 text-right font-bold text-primary-700">

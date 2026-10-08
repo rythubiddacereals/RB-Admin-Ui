@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { ImageUpload } from '@/pages/products/ProductForm';
 
 /**
  * Categories management — flat list from the API, rendered as an
@@ -54,6 +55,12 @@ interface CategoryFormValues {
   image: string;
   isActive: number;
 }
+
+/** Legacy rows carry the bare S3 bucket URL with no object key — treat that as "no image". */
+const cleanImage = (u?: string): string => {
+  const s = (u ?? '').trim();
+  return !s || s.endsWith('/') ? '' : s;
+};
 
 const EMPTY_FORM: CategoryFormValues = {
   categoryId: 0,
@@ -154,7 +161,7 @@ export function CategoriesPage() {
       name: c.name,
       parentCategoryId: c.parentCategoryId || 0,
       position: c.position,
-      image: c.image,
+      image: cleanImage(c.image),
       isActive: c.isActive,
     });
 
@@ -186,6 +193,13 @@ export function CategoriesPage() {
               }`}
               title={c.isActive === 1 ? 'Active' : 'Inactive'}
             />
+            {c.parentCategoryId === 0 && cleanImage(c.image) ? (
+              <img
+                src={cleanImage(c.image)}
+                alt=""
+                className="h-7 w-7 flex-shrink-0 rounded-full border border-secondary-200 object-cover"
+              />
+            ) : null}
             <span className="font-bold text-gray-900">{c.name}</span>
             {c.parentCategoryId === 0 ? (
               <span className="rounded-full bg-primary-50 px-2 py-0.5 text-[10px] font-extrabold text-primary-700">
@@ -322,6 +336,11 @@ export function CategoriesPage() {
           onSubmit={values => saveMut.mutate(values)}
           submitting={saveMut.isPending}
           parents={parentOptions}
+          error={
+            saveMut.isError
+              ? ((saveMut.error as any)?.response?.data?.message ?? 'Could not save category.')
+              : null
+          }
         />
       ) : null}
     </div>
@@ -337,6 +356,7 @@ function CategoryFormModal({
   onSubmit,
   submitting,
   parents,
+  error,
 }: {
   value: CategoryFormValues;
   onChange: (v: CategoryFormValues) => void;
@@ -344,6 +364,7 @@ function CategoryFormModal({
   onSubmit: (v: CategoryFormValues) => void;
   submitting: boolean;
   parents: CategoryDto[];
+  error?: string | null;
 }) {
   const isEdit = value.categoryId > 0;
   const set = (patch: Partial<CategoryFormValues>) =>
@@ -416,6 +437,20 @@ function CategoryFormModal({
             </select>
           </div>
 
+          {/* Category image — shown on the website sidebar/chips and the
+              mobile app's home bubbles, Shop rail and category grid.
+              512×512 square, subject centred (the apps crop it round). */}
+          {/* Sub-categories are shown as text only in the shop and the app,
+              so they do not take an image. */}
+          {value.parentCategoryId === 0 ? (
+          <ImageUpload
+            label="Category image (512×512, optional)"
+            value={value.image}
+            onChange={url => set({ image: url })}
+            disabled={submitting}
+          />
+          ) : null}
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="mb-1 block text-sm font-bold text-gray-800">
@@ -446,6 +481,7 @@ function CategoryFormModal({
             </div>
           </div>
 
+          {error ? <p className="text-sm font-bold text-danger">{error}</p> : null}
           <div className="flex items-center justify-end gap-2 pt-2">
             <button
               type="button"

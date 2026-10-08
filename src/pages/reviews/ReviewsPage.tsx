@@ -54,7 +54,10 @@ interface ListResponse {
 type Filter = 'pending' | 'approved' | 'rejected' | 'all';
 
 const FILTERS: { key: Filter; label: string; predicate: (r: Review) => boolean }[] = [
-  { key: 'pending', label: 'Pending', predicate: r => r.status === STATUS_PENDING },
+  // The shop saves a brand-new review with status -1 (legacy "new");
+  // the moderation queue must treat those as Pending, otherwise they
+  // only ever surface under "All" and never get approved.
+  { key: 'pending', label: 'Pending', predicate: r => r.status === STATUS_PENDING || r.status === -1 },
   { key: 'approved', label: 'Approved', predicate: r => r.status === STATUS_APPROVED },
   { key: 'rejected', label: 'Rejected', predicate: r => r.status === STATUS_REJECTED },
   { key: 'all', label: 'All', predicate: () => true },
@@ -91,7 +94,8 @@ export function ReviewsPage() {
   const reviews = useMemo(() => data?.reviews ?? [], [data]);
   const counts = useMemo(
     () => ({
-      pending: reviews.filter(r => r.status === STATUS_PENDING).length,
+      // Same rule as the Pending tab: shop-submitted reviews arrive as -1.
+      pending: reviews.filter(r => r.status === STATUS_PENDING || r.status === -1).length,
       approved: reviews.filter(r => r.status === STATUS_APPROVED).length,
       rejected: reviews.filter(r => r.status === STATUS_REJECTED).length,
       all: reviews.length,

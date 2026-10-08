@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Award,
   ChevronRight,
+  EyeOff,
   Loader2,
   Package,
   RefreshCw,
@@ -26,7 +27,7 @@ import { api } from '@/lib/api';
  * against arbitrary field writes.
  */
 
-type FlagKey = 'bestSeller' | 'newArrival' | 'smFeatured' | 'outOfStock';
+type FlagKey = 'bestSeller' | 'newArrival' | 'smFeatured' | 'outOfStock' | 'hide';
 
 export interface FlagPreset {
   flag: FlagKey;
@@ -61,6 +62,8 @@ interface ProductRow {
   bestSeller: number;
   newArrival: number;
   smFeatured: number;
+  /** 1 = hidden from the shop. Only present in the list when fetched with includeHidden=1. */
+  hide: number;
   // Same shape the main Products list uses. The real per-variant
   // pricing lives here (Product.price is 0 for most RB rows).
   qtyOptions: QtyOptionRow[];
@@ -104,10 +107,17 @@ function displayPrice(p: ProductRow): {
 
 export function ProductFlagListPage({ preset }: { preset: FlagPreset }) {
   const qc = useQueryClient();
+  // Hidden products are excluded from the default list endpoint, so the
+  // Hidden page asks for them explicitly — under its own cache key, so
+  // the regular Products list never picks up hidden rows.
+  const wantsHidden = preset.flag === 'hide';
+  const listKey = wantsHidden ? ['admin', 'products', 'with-hidden'] : ['admin', 'products'];
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['admin', 'products'],
+    queryKey: listKey,
     queryFn: async () => {
-      const r = await api.get<ProductsResponse>('/api/admin/products');
+      const r = await api.get<ProductsResponse>(
+        `/api/admin/products${wantsHidden ? '?includeHidden=1' : ''}`,
+      );
       return r.data;
     },
   });
@@ -154,7 +164,7 @@ export function ProductFlagListPage({ preset }: { preset: FlagPreset }) {
       // Optimistically flip the flag in cache so the tile leaves the
       // list right away — no wait for the refetch to feel snappy.
       qc.setQueryData<ProductsResponse | undefined>(
-        ['admin', 'products'],
+        listKey,
         old => {
           if (!old) return old;
           return {
@@ -167,8 +177,17 @@ export function ProductFlagListPage({ preset }: { preset: FlagPreset }) {
       );
       qc.invalidateQueries({ queryKey: ['admin', 'product', id] });
       qc.invalidateQueries({ queryKey: ['admin', 'dashboard', 'stats'] });
+      if (wantsHidden) {
+        // An unhidden product must reappear in the regular Products
+        // list (and vice-versa) — refresh that cache too.
+        qc.invalidateQueries({ queryKey: ['admin', 'products'] });
+      }
       flash(
-        next === 1
+        wantsHidden
+          ? next === 1
+            ? `#${id} is now hidden from the shop`
+            : `#${id} is visible in the shop again`
+          : next === 1
           ? `Added #${id} to ${preset.title}`
           : `Removed #${id} from ${preset.title}`,
       );
@@ -417,4 +436,16 @@ export const OUT_OF_STOCK: FlagPreset = {
   removeVerb: 'Back in stock',
   emptyText:
     'Nothing is marked out of stock. Good news — everything is available.',
+};
+
+export const HIDDEN_PRODUCTS: FlagPreset = {
+  flag: 'hide',
+  title: 'Hidden Products',
+  subtitle: 'Hidden from the shop (not deleted) — unhide to list them again',
+  Icon: EyeOff,
+  positiveVerb: 'Hidden',
+  negativeVerb: 'Hide from shop',
+  removeVerb: 'Unhide',
+  emptyText:
+    'No products are hidden. Products you hide from a product\'s edit page will appear here.',
 };

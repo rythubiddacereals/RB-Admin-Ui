@@ -8,6 +8,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Trash2,
   Upload,
   X,
 } from 'lucide-react';
@@ -34,6 +35,8 @@ interface GalleryItem {
   isActive: number;
   position: number;
   section: number;
+  /** Category the slide's "Shop Now" opens; null = products section. */
+  linkCategoryId: number | null;
 }
 
 interface ListResponse {
@@ -55,6 +58,8 @@ interface FormValues {
   position: string;
   section: string;
   isActive: number;
+  /** Select value: '0' = products section, otherwise a category id. */
+  linkCategoryId: string;
 }
 
 // New items are always home-hero backgrounds: code MAIN_GALLERY,
@@ -77,6 +82,7 @@ const EMPTY_FORM: FormValues = {
   position: '0',
   section: '0',
   isActive: 1,
+  linkCategoryId: '0',
 };
 
 function itemToForm(g: GalleryItem): FormValues {
@@ -96,6 +102,7 @@ function itemToForm(g: GalleryItem): FormValues {
     position: String(g.position),
     section: String(g.section),
     isActive: g.isActive,
+    linkCategoryId: String(g.linkCategoryId ?? 0),
   };
 }
 
@@ -110,6 +117,7 @@ function formToPayload(f: FormValues) {
     position: Number(f.position) || 0,
     section: Number(f.section) || 0,
     isActive: f.isActive,
+    linkCategoryId: Number(f.linkCategoryId) || 0,
   };
 }
 
@@ -189,6 +197,14 @@ export function GalleryPage() {
       flash(
         `${fresh.isActive === 1 ? 'Activated' : 'Deactivated'} ${fresh.code}`,
       );
+    },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async (id: number) => api.delete(`/api/admin/gallery/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'gallery'] });
+      flash('Gallery item deleted');
     },
   });
 
@@ -359,6 +375,17 @@ export function GalleryPage() {
                       </>
                     )}
                   </button>
+                  <button
+                    onClick={() => {
+                      if (window.confirm('Delete this gallery item permanently? This cannot be undone.')) {
+                        deleteMut.mutate(g.id);
+                      }
+                    }}
+                    disabled={deleteMut.isPending}
+                    className="rounded-lg px-2 py-1 text-xs font-bold text-danger hover:bg-danger-soft disabled:opacity-50"
+                  >
+                    <Trash2 size={12} className="inline" /> Delete
+                  </button>
                 </div>
               </div>
             </div>
@@ -402,6 +429,24 @@ function GalleryFormModal({
 }) {
   const isEdit = value.id > 0;
   const set = (patch: Partial<FormValues>) => onChange({ ...value, ...patch });
+  // Categories for the "Shop Now opens" picker: parents first, each
+  // followed by its sub-categories as "Parent › Child".
+  const categoriesQuery = useQuery({
+    queryKey: ['admin', 'categories'],
+    queryFn: async () =>
+      (await api.get<{ categories: { id: number; parentCategoryId: number; name: string }[] }>('/api/admin/categories')).data,
+  });
+  const categoryOptions = useMemo(() => {
+    const all = categoriesQuery.data?.categories ?? [];
+    const out: { id: number; label: string }[] = [];
+    for (const p of all.filter(c => !c.parentCategoryId)) {
+      out.push({ id: p.id, label: p.name });
+      for (const c of all.filter(x => x.parentCategoryId === p.id)) {
+        out.push({ id: c.id, label: `${p.name} › ${c.name}` });
+      }
+    }
+    return out;
+  }, [categoriesQuery.data]);
   // Validation feedback shown on click — the button itself stays
   // clickable so a missing image produces a visible message instead
   // of a silently-greyed button.
@@ -456,6 +501,23 @@ function GalleryFormModal({
             placeholder="Notes about this image."
             disabled={submitting}
           />
+        </Field>
+
+        <Field label="Shop Now opens">
+          <select
+            value={value.linkCategoryId}
+            onChange={e => set({ linkCategoryId: e.target.value })}
+            className={inputCls}
+            disabled={submitting}
+          >
+            <option value="0">All products (default)</option>
+            {categoryOptions.map(o => (
+              <option key={o.id} value={String(o.id)}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <p className={hintCls}>Where this slide's "Shop Now" button takes the customer.</p>
         </Field>
 
         <div className="grid gap-4 sm:grid-cols-2">

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronRight, Loader2, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
@@ -18,6 +18,8 @@ import { formatWorkflowStatus } from '@/lib/orderStatus';
 interface OrderRow {
   id: number;
   date: string;
+  /** yyyy-MM-dd in IST — stable key for the "today" filter. */
+  dateKey: string;
   customerName: string;
   phone: string;
   total: number;
@@ -39,6 +41,14 @@ async function fetchOrders(): Promise<OrdersResponse> {
 
 const PAGE_SIZE = 25;
 
+/** Mirrors the dashboard API's TERMINAL_STATUSES — "pending" is everything else. */
+const TERMINAL_STATUSES = new Set(['DELIVERED', 'DELIVERY_FAILED', 'ORDER_CANCELLED', 'CANCELLED', 'CLOSED']);
+
+/** Today's date as yyyy-MM-dd in IST — matches the API's `dateKey`. */
+function todayIst(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
 const successStates = ['DELIVERED', 'COLLECTED', 'VERIFIED', 'CAPTURED', 'COMPLETED', 'CLOSED'];
 const dangerStates = ['CANCELLED', 'ORDER_CANCELLED', 'FAILED', 'DELIVERY_FAILED'];
 
@@ -58,18 +68,64 @@ export function OrdersListPage() {
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
 
+  // Filters live in the URL so the dashboard tiles / status rows can
+  // deep-link straight to a filtered view (?status=PENDING, ?date=today,
+  // ?status=DELIVERED …) and the view is shareable / refresh-safe.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusParam = (searchParams.get('status') ?? '').toUpperCase();
+  const todayOnly = searchParams.get('date') === 'today';
+  const setStatusParam = (v: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (v) next.set('status', v); else next.delete('status');
+    setSearchParams(next);
+    setPage(1);
+  };
+  const setTodayOnly = (on: boolean) => {
+    const next = new URLSearchParams(searchParams);
+    if (on) next.set('date', 'today'); else next.delete('date');
+    setSearchParams(next);
+    setPage(1);
+  };
+
+  const statusOptions = useMemo(() => {
+    const seen = new Set<string>();
+    for (const o of data?.orders ?? []) {
+      const s = (o.workflowStatus ?? '').toUpperCase();
+      if (s) seen.add(s);
+    }
+    return Array.from(seen).sort();
+  }, [data]);
+
   const filtered = useMemo(() => {
-    const all = data?.orders ?? [];
+    let all = data?.orders ?? [];
+    if (todayOnly) {
+      const t = todayIst();
+      all = all.filter(o => o.dateKey === t);
+    }
+    if (statusParam === 'PENDING') {
+      all = all.filter(o => !TERMINAL_STATUSES.has((o.workflowStatus ?? '').toUpperCase()));
+    } else if (statusParam) {
+      all = all.filter(
+        o =>
+          (o.workflowStatus ?? '').toUpperCase() === statusParam ||
+          (o.orderStatus ?? '').toUpperCase() === statusParam,
+      );
+    }
     if (!query.trim()) return all;
     const needle = query.trim().toLowerCase();
+    // Search the DISPLAYED "Order Status" label (e.g. "Closed") and the
+    // payment status too — previously only the raw workflow status was
+    // searched, so typing "Closed" matched nothing.
     return all.filter(
       o =>
         String(o.id).includes(needle) ||
         o.customerName.toLowerCase().includes(needle) ||
         o.phone.toLowerCase().includes(needle) ||
-        o.workflowStatus.toLowerCase().includes(needle),
+        o.workflowStatus.toLowerCase().includes(needle) ||
+        (o.orderStatus ?? '').toLowerCase().includes(needle) ||
+        (o.paymentStatus ?? '').toLowerCase().includes(needle),
     );
-  }, [data, query]);
+  }, [data, query, statusParam, todayOnly]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -97,6 +153,27 @@ export function OrdersListPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <select
+            value={statusParam}
+            onChange={e => setStatusParam(e.target.value)}
+            className="rounded-lg border-2 border-secondary-200 px-3 py-2 font-semibold focus:border-primary-500 focus:outline-none"
+            aria-label="Filter by status"
+          >
+            <option value="">All statuses</option>
+            <option value="PENDING">Pending (not yet delivered)</option>
+            {statusOptions.map(s => (
+              <option key={s} value={s}>{formatWorkflowStatus(s)}</option>
+            ))}
+          </select>
+          <label className="inline-flex items-center gap-1.5 text-sm font-semibold text-secondary-800">
+            <input
+              type="checkbox"
+              checked={todayOnly}
+              onChange={e => setTodayOnly(e.target.checked)}
+              className="h-4 w-4"
+            />
+            Today only
+          </label>
           <input
             type="search"
             value={query}
@@ -104,7 +181,7 @@ export function OrdersListPage() {
               setQuery(e.target.value);
               setPage(1);
             }}
-            placeholder="Search by id, name, phone, status…"
+            placeholder="Search id, name, phone, order/payment status…"
             className="w-72 rounded-lg border-2 border-secondary-200 px-4 py-2 font-semibold focus:border-primary-500 focus:outline-none"
           />
           <button
@@ -200,7 +277,9 @@ export function OrdersListPage() {
                             o.paymentStatus,
                           )}`}
                         >
-                          {o.paymentStatus || '—'}
+                          {['ORDER_CANCELLED', 'CANCELLED'].includes((o.workflowStatus || '').toUpperCase())
+                            ? '—'
+                            : o.paymentStatus || '—'}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">

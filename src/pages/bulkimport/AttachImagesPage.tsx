@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   CheckCircle2,
   ImagePlus,
-  ImageOff,
   Loader2,
   RefreshCw,
   Search,
@@ -32,6 +31,8 @@ interface ProductRow {
   sku: string;
   thumbNail: string;
   smallImage: string;
+  hoverImage: string;
+  swatchImage: string;
   mainCategoryName: string;
   subCategoryName: string;
   hide: number;
@@ -42,15 +43,14 @@ interface ListResponse {
   products: ProductRow[];
 }
 
-const hasImage = (p: ProductRow) =>
-  (p.thumbNail && p.thumbNail.trim() !== '') || (p.smallImage && p.smallImage.trim() !== '');
+const hasImage = (p: ProductRow) => !!(p.thumbNail && p.thumbNail.trim() !== '');
 
 export function AttachImagesPage() {
   const qc = useQueryClient();
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['admin', 'products'],
     queryFn: async () => {
-      const r = await api.get<ListResponse>('/api/admin/products');
+      const r = await api.get<ListResponse>('/api/admin/products?includeHidden=1');
       return r.data;
     },
   });
@@ -174,6 +174,14 @@ export function AttachImagesPage() {
   );
 }
 
+/** The four image slots a product has. Only "main" decides shop visibility. */
+const IMAGE_SLOTS: { field: 'thumbNail' | 'smallImage' | 'swatchImage' | 'hoverImage'; label: string }[] = [
+  { field: 'thumbNail', label: 'Main' },
+  { field: 'smallImage', label: 'Small' },
+  { field: 'swatchImage', label: 'Swatch' },
+  { field: 'hoverImage', label: 'Hover' },
+];
+
 function ProductImageCard({
   product,
   onDone,
@@ -181,9 +189,66 @@ function ProductImageCard({
   product: ProductRow;
   onDone: (name: string) => void;
 }) {
+  const [error, setError] = useState<string | null>(null);
+  const withMain = hasImage(product);
+
+  return (
+    <div
+      className={`overflow-hidden rounded-xl border-2 bg-white shadow-sm ${
+        withMain ? 'border-secondary-200' : 'border-dashed border-danger'
+      }`}
+    >
+      <div className="p-2.5 pb-1">
+        <div className="truncate text-sm font-bold text-gray-900" title={product.name}>
+          {product.name}
+        </div>
+        <div className="truncate text-xs font-semibold text-secondary-700">
+          {product.subCategoryName || product.mainCategoryName || 'No category'}
+          {product.hide === 1 ? ' · hidden' : ''}
+        </div>
+        {!withMain ? (
+          <div className="mt-1 text-[11px] font-bold text-danger">
+            No main image - not shown in the shop
+          </div>
+        ) : null}
+      </div>
+
+      {/* Four separate slots: each upload fills ONLY its own slot. */}
+      <div className="grid grid-cols-4 gap-1.5 p-2.5 pt-1.5">
+        {IMAGE_SLOTS.map(slot => (
+          <ImageSlot
+            key={slot.field}
+            productId={product.id}
+            field={slot.field}
+            label={slot.label}
+            url={(product[slot.field] || '').trim()}
+            onError={setError}
+            onDone={() => onDone(`${product.name} (${slot.label.toLowerCase()} image)`)}
+          />
+        ))}
+      </div>
+      {error ? <div className="px-2.5 pb-2 text-xs font-bold text-danger">{error}</div> : null}
+    </div>
+  );
+}
+
+function ImageSlot({
+  productId,
+  field,
+  label,
+  url,
+  onError,
+  onDone,
+}: {
+  productId: number;
+  field: 'thumbNail' | 'smallImage' | 'swatchImage' | 'hoverImage';
+  label: string;
+  url: string;
+  onError: (msg: string | null) => void;
+  onDone: () => void;
+}) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const mut = useMutation({
     mutationFn: async (file: File) => {
@@ -192,90 +257,66 @@ function ProductImageCard({
       const up = await api.post<{ url: string }>('/api/admin/products/upload-image', form, {
         timeout: 60_000,
       });
-      // Thumbnail + small image both get the photo — those are the two
-      // slots the shop actually renders on tiles and lists.
-      await api.patch(`/api/admin/products/${product.id}/images`, {
-        thumbNail: up.data.url,
-        smallImage: up.data.url,
-      });
+      // Only this slot is sent - the server keeps the other three as they are.
+      await api.patch(`/api/admin/products/${productId}/images`, { [field]: up.data.url });
     },
-    onSuccess: () => onDone(product.name),
+    onSuccess: () => onDone(),
     onError: (err: any) =>
-      setError(err?.response?.data?.message ?? err?.message ?? 'Upload failed.'),
+      onError(err?.response?.data?.message ?? err?.message ?? 'Upload failed.'),
   });
 
   const pick = (file: File | undefined | null) => {
-    setError(null);
+    onError(null);
     if (!file) return;
     if (!/\.(png|jpe?g|gif|webp|svg)$/i.test(file.name)) {
-      setError('Only PNG / JPG / GIF / WEBP / SVG.');
+      onError('Only PNG / JPG / GIF / WEBP / SVG.');
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
-      setError('Max 10 MB.');
+      onError('Max 10 MB.');
       return;
     }
     mut.mutate(file);
   };
 
-  const withPhoto = hasImage(product);
-
   return (
-    <div
-      onClick={() => !mut.isPending && inputRef.current?.click()}
-      onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={e => { e.preventDefault(); setDragOver(false); pick(e.dataTransfer.files?.[0]); }}
-      className={`cursor-pointer overflow-hidden rounded-xl border-2 bg-white shadow-sm transition-all ${
-        dragOver
-          ? 'border-primary-500 ring-2 ring-primary-200'
-          : withPhoto
-            ? 'border-secondary-200 hover:border-primary-300'
-            : 'border-dashed border-secondary-300 hover:border-primary-400'
-      }`}
-    >
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".png,.jpg,.jpeg,.gif,.webp,.svg"
-        className="hidden"
-        onChange={e => { pick(e.target.files?.[0]); e.target.value = ''; }}
-      />
-
-      <div className="relative flex h-32 items-center justify-center bg-secondary-50">
+    <div className="text-center">
+      <div
+        onClick={() => !mut.isPending && inputRef.current?.click()}
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={e => { e.preventDefault(); setDragOver(false); pick(e.dataTransfer.files?.[0]); }}
+        title={`Upload ${label.toLowerCase()} image`}
+        className={`relative flex aspect-square cursor-pointer items-center justify-center overflow-hidden rounded-lg border-2 bg-secondary-50 transition-all ${
+          dragOver
+            ? 'border-primary-500 ring-2 ring-primary-200'
+            : url
+              ? 'border-secondary-200 hover:border-primary-300'
+              : 'border-dashed border-secondary-300 hover:border-primary-400'
+        }`}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".png,.jpg,.jpeg,.gif,.webp,.svg"
+          className="hidden"
+          onChange={e => { pick(e.target.files?.[0]); e.target.value = ''; }}
+        />
         {mut.isPending ? (
-          <Loader2 size={26} className="animate-spin text-primary-500" />
-        ) : withPhoto ? (
+          <Loader2 size={18} className="animate-spin text-primary-500" />
+        ) : url ? (
           <img
-            src={product.thumbNail || product.smallImage}
-            alt={product.name}
+            src={url}
+            alt={label}
             className="h-full w-full object-contain"
             onError={e => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
           />
         ) : (
-          <div className="flex flex-col items-center gap-1 text-secondary-500">
-            <ImageOff size={26} />
-            <span className="text-[11px] font-bold uppercase">No photo</span>
-          </div>
+          <ImagePlus size={16} className="text-secondary-400" />
         )}
-        {!mut.isPending ? (
-          <div className="absolute bottom-1.5 right-1.5 rounded-full bg-primary-500 p-1.5 text-white shadow">
-            <ImagePlus size={13} />
-          </div>
-        ) : null}
       </div>
-
-      <div className="p-2.5">
-        <div className="truncate text-sm font-bold text-gray-900" title={product.name}>
-          {product.name}
-        </div>
-        <div className="truncate text-xs font-semibold text-secondary-700">
-          {product.subCategoryName || product.mainCategoryName}
-          {product.hide === 1 ? ' · hidden' : ''}
-        </div>
-        {error ? (
-          <div className="mt-1 text-xs font-bold text-danger">{error}</div>
-        ) : null}
+      <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wide text-secondary-800">
+        {label}
       </div>
     </div>
   );

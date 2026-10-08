@@ -18,6 +18,6 @@ export function formatPaymentMethod(raw: string | null | undefined): string {
   if (!raw) return '—';
   const upper = raw.trim().toUpperCase();
   if (upper === 'PAY_AFTER_DELIVERY') return 'COD';
-  if (upper === 'RAZORPAY') return 'Online';
+  if (upper === 'RAZORPAY' || upper === 'CASHFREE') return 'Online';
   return raw;
 }

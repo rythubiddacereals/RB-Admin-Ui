@@ -38,6 +38,7 @@ interface CategoryRow {
   name: string;
   level: number;
   isActive: number;
+  position?: number;
 }
 
 interface CategoriesResponse {
@@ -62,6 +63,8 @@ interface QtyOption {
   price: number;
   marketPrice: number;
   displayOrder: number;
+  /** 1 = hidden from customers for this product only. */
+  hidden?: number;
 }
 
 interface ProductDetail {
@@ -162,6 +165,7 @@ function formToPayload(f: FormValues) {
       price: q.price,
       marketPrice: q.marketPrice,
       displayOrder: q.displayOrder || idx + 1,
+      hidden: q.hidden === 1 ? 1 : 0,
     })),
   };
 }
@@ -227,21 +231,39 @@ export function ProductFormPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [quantityOptionsQuery.data, form.qtyOptions]);
 
-  const leafCategories = useMemo(() => {
+  // Dropdown groups: each active parent (admin position order) with its
+  // active children A→Z, so "Rice › Basmati / Brown / Sona Masoori" sit
+  // together instead of being scattered alphabetically by child name.
+  const categoryGroups = useMemo(() => {
     const all = categoriesQuery.data?.categories ?? [];
-    // A leaf category has no other rows citing it as parent.
-    const parentIds = new Set(all.map(c => c.parentCategoryId).filter(id => id > 0));
-    return all
-      .filter(c => !parentIds.has(c.id) && c.isActive === 1)
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const active = all.filter(c => c.isActive === 1);
+    const parents = active
+      .filter(c => !c.parentCategoryId)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0) || a.name.localeCompare(b.name));
+    return parents.map(p => ({
+      parent: p,
+      children: active
+        .filter(c => c.parentCategoryId === p.id)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    }));
   }, [categoriesQuery.data]);
 
-  const parentNameById = useMemo(() => {
-    const all = categoriesQuery.data?.categories ?? [];
-    const map = new Map<number, string>();
-    all.forEach(c => map.set(c.id, c.name));
-    return map;
-  }, [categoriesQuery.data]);
+  // Category is picked in two steps: the parent first, then (optionally) one
+  // of THAT parent's sub-categories. form.categoryId stays the single link
+  // the API stores - the sub-category when one is chosen, else the parent.
+  const allCategories = categoriesQuery.data?.categories ?? [];
+  const selectedCategory = allCategories.find(c => c.id === form.categoryId) ?? null;
+  const selectedParentId = selectedCategory
+    ? (selectedCategory.parentCategoryId > 0 ? selectedCategory.parentCategoryId : selectedCategory.id)
+    : 0;
+  const selectedSubId =
+    selectedCategory && selectedCategory.parentCategoryId > 0 ? selectedCategory.id : 0;
+  const subCategoryOptions =
+    categoryGroups.find(g => g.parent.id === selectedParentId)?.children ?? [];
+  const parentName = allCategories.find(c => c.id === selectedParentId)?.name ?? '';
+  const categoryPath = selectedCategory
+    ? (selectedSubId > 0 ? `${parentName} › ${selectedCategory.name}` : selectedCategory.name)
+    : '';
 
   const saveMut = useMutation({
     mutationFn: async () => {
@@ -321,6 +343,38 @@ export function ProductFormPage() {
       setSaveError('Product name and category are required.');
       return;
     }
+    if (!form.qtyOptions.some(o => o.name.trim())) {
+      setSaveError('Add at least one quantity option (e.g. "1 kg") with a price.');
+      return;
+    }
+    const packKey = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+    const seenPacks = new Set<string>();
+    for (const o of form.qtyOptions) {
+      if (!o.name.trim()) continue;
+      if (seenPacks.has(packKey(o.name))) {
+        setSaveError(
+          `The quantity option "${o.name.trim()}" is added more than once. Each pack size can be used only once per product.`,
+        );
+        return;
+      }
+      seenPacks.add(packKey(o.name));
+    }
+    // The system cannot know whether a category is the "right" one, so the
+    // admin confirms the placement whenever it is new or has changed.
+    const originalCategoryId = isEdit ? (productQuery.data?.categoryId ?? 0) : 0;
+    if (form.categoryId !== originalCategoryId) {
+      const ok = window.confirm(
+        `"${form.name.trim()}" will be listed under:\n\n${categoryPath}\n\nIs this the correct category?`,
+      );
+      if (!ok) return;
+    }
+    // The shop only lists products that have a main (thumbnail) image.
+    if (!form.thumbNail.trim()) {
+      const ok = window.confirm(
+        `"${form.name.trim()}" has no main image.\n\nIt will be saved but will NOT appear in the shop until a Thumbnail image is added (Products → Attach Images).\n\nSave anyway?`,
+      );
+      if (!ok) return;
+    }
     saveMut.mutate();
   };
 
@@ -380,7 +434,7 @@ export function ProductFormPage() {
             </Field>
             <Field label="Category" required>
               <select
-                value={form.categoryId}
+                value={selectedParentId}
                 onChange={e => set({ categoryId: Number(e.target.value) })}
                 className={inputCls}
                 required
@@ -389,20 +443,53 @@ export function ProductFormPage() {
                 <option value={0}>
                   {categoriesQuery.isLoading ? 'Loading…' : '— Select a category —'}
                 </option>
-                {leafCategories.map(c => {
-                  const parent =
-                    c.parentCategoryId > 0
-                      ? parentNameById.get(c.parentCategoryId)
-                      : null;
-                  return (
-                    <option key={c.id} value={c.id}>
-                      {parent ? `${parent} › ${c.name}` : c.name}
-                    </option>
-                  );
-                })}
+                {categoryGroups.map(g => (
+                  <option key={g.parent.id} value={g.parent.id}>
+                    {g.parent.name}
+                  </option>
+                ))}
+                {/* A product already linked to a category that is now inactive
+                    still has to show what it is linked to. */}
+                {selectedParentId > 0 && !categoryGroups.some(g => g.parent.id === selectedParentId) ? (
+                  <option value={selectedParentId}>{parentName || `Category #${selectedParentId}`}</option>
+                ) : null}
+              </select>
+            </Field>
+            <Field label="Sub-category (optional)">
+              <select
+                value={selectedSubId}
+                onChange={e => {
+                  const sub = Number(e.target.value);
+                  set({ categoryId: sub > 0 ? sub : selectedParentId });
+                }}
+                className={inputCls}
+                disabled={
+                  saveMut.isPending || selectedParentId <= 0 || subCategoryOptions.length === 0
+                }
+              >
+                <option value={0}>
+                  {selectedParentId <= 0
+                    ? 'Select a category first'
+                    : subCategoryOptions.length === 0
+                    ? 'No sub-categories'
+                    : '— None —'}
+                </option>
+                {subCategoryOptions.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+                {selectedSubId > 0 && !subCategoryOptions.some(c => c.id === selectedSubId) ? (
+                  <option value={selectedSubId}>{selectedCategory?.name}</option>
+                ) : null}
               </select>
             </Field>
           </div>
+          {categoryPath ? (
+            <p className="rounded-lg bg-primary-50 px-3 py-2 text-sm font-bold text-primary-700">
+              This product will be listed under: {categoryPath}
+            </p>
+          ) : null}
           <p className={hintCls}>
             Pricing is defined per variant in the "Quantity variants"
             section below (₹ on each row). This page has no
@@ -536,6 +623,7 @@ export function ProductFormPage() {
                     <th className="px-3 py-2 text-left font-bold">#</th>
                     <th className="px-3 py-2 text-left font-bold">Name</th>
                     <th className="px-3 py-2 text-right font-bold">Price (₹)</th>
+                    <th className="px-3 py-2 text-center font-bold">Hidden</th>
                     <th className="px-3 py-2" />
                   </tr>
                 </thead>
@@ -557,11 +645,20 @@ export function ProductFormPage() {
                               ? 'Loading…'
                               : '— Select —'}
                           </option>
-                          {qtyNameChoices.map(name => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          ))}
+                          {qtyNameChoices.map(name => {
+                            // Already chosen on another row of this product.
+                            const usedElsewhere = form.qtyOptions.some(
+                              (other, i) =>
+                                i !== idx &&
+                                other.name.trim().replace(/\s+/g, ' ').toLowerCase() ===
+                                  name.trim().replace(/\s+/g, ' ').toLowerCase(),
+                            );
+                            return (
+                              <option key={name} value={name} disabled={usedElsewhere}>
+                                {name}{usedElsewhere ? ' (already added)' : ''}
+                              </option>
+                            );
+                          })}
                         </select>
                       </td>
                       <td className="px-3 py-2 text-right">
@@ -569,13 +666,24 @@ export function ProductFormPage() {
                           type="number"
                           step="0.01"
                           min={0}
-                          value={q.price}
+                          value={q.price === 0 ? '' : q.price}
                           onChange={e =>
                             setOption(idx, { price: Number(e.target.value) || 0 })
                           }
                           className="w-28 rounded-md border border-secondary-200 px-2 py-1.5 text-right font-semibold focus:border-primary-500 focus:outline-none"
                           disabled={saveMut.isPending}
                         />
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <label className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-secondary-800" title="Hide this pack size from customers for this product only">
+                          <input
+                            type="checkbox"
+                            checked={q.hidden === 1}
+                            onChange={e => setOption(idx, { hidden: e.target.checked ? 1 : 0 })}
+                            disabled={saveMut.isPending}
+                          />
+                          {q.hidden === 1 ? 'Hidden' : ''}
+                        </label>
                       </td>
                       {/* Market price (MRP) removed from the UI — the
                           field still rides through the payload untouched
@@ -701,7 +809,7 @@ function Field({
   );
 }
 
-function ImageUpload({
+export function ImageUpload({
   label,
   value,
   onChange,

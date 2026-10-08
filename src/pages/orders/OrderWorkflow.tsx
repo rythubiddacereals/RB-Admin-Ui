@@ -118,8 +118,13 @@ function badgeClass(state?: string): string {
  */
 function nextStepsFor(currentStatus: string): string[] {
   const s = (currentStatus || '').toUpperCase();
-  if (['DELIVERED', 'DELIVERY_FAILED', 'ORDER_CANCELLED', 'CANCELLED', 'CLOSED'].includes(s)) {
+  if (['DELIVERED', 'ORDER_CANCELLED', 'CANCELLED', 'CLOSED'].includes(s)) {
     return [];
+  }
+  // A failed delivery is not the end: the order can go out again (a new
+  // agent / next day) or be cancelled.
+  if (s === 'DELIVERY_FAILED') {
+    return ['DELIVERY_AGENT', 'ORDER_CANCELLED'];
   }
   if (s === 'DELIVERY_AGENT') {
     return ['DELIVERY_AGENT', 'DELIVERED', 'DELIVERY_FAILED', 'ORDER_CANCELLED'];
@@ -264,7 +269,7 @@ export function OrderWorkflowPage() {
   const o = data;
   const isTerminal =
     successStates.includes(o.status.toUpperCase()) ||
-    dangerStates.includes(o.status.toUpperCase());
+    (dangerStates.includes(o.status.toUpperCase()) && o.status.toUpperCase() !== 'DELIVERY_FAILED');
 
   return (
     <div className="space-y-6">
@@ -362,14 +367,16 @@ export function OrderWorkflowPage() {
             </div>
             <div className="!mt-4 flex items-center justify-between rounded-lg bg-secondary-50 px-3 py-2">
               <div className="text-xs font-bold uppercase text-secondary-700">
-                {formatPaymentMethod(o.payment?.method)}
+                {formatPaymentMethod(o.payment?.method || 'PAY_AFTER_DELIVERY')}
               </div>
               <span
                 className={`rounded-full px-3 py-1 text-xs font-bold ${badgeClass(
                   o.payment?.status,
                 )}`}
               >
-                {o.payment?.status || '—'}
+                {['ORDER_CANCELLED', 'CANCELLED'].includes(o.status.toUpperCase())
+                  ? '—'
+                  : o.payment?.status || '—'}
               </span>
             </div>
             {o.payment?.refundStatus ? (
@@ -677,7 +684,9 @@ function ConfirmStatusModal({
   // workflow log, sent to the customer via SMS, and used as the
   // Razorpay refund reason. Empty reason disables the confirm.
   const cancelReasonOk = !isCancellation || reason.trim().length > 0;
-  const isOnline = (paymentMethod || '').toUpperCase() === 'RAZORPAY';
+  const gatewayCode = (paymentMethod || '').toUpperCase();
+  const isOnline = ['RAZORPAY', 'CASHFREE'].includes(gatewayCode);
+  const gatewayName = gatewayCode === 'CASHFREE' ? 'Cashfree' : 'Razorpay';
   const title = isReassign
     ? `Reassign to ${agentName ?? 'the selected agent'}?`
     : `Change status to ${to}?`;
@@ -733,7 +742,7 @@ function ConfirmStatusModal({
               <p className="rounded-lg bg-danger-soft px-3 py-2 text-xs font-semibold text-danger">
                 Payment will be marked <b>CANCELLED</b>.{' '}
                 {isOnline
-                  ? 'The Razorpay payment will be fully refunded automatically.'
+                  ? `The ${gatewayName} payment will be fully refunded automatically.`
                   : "The customer won't be charged."}
               </p>
               <div>

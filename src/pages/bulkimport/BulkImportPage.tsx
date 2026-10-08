@@ -32,6 +32,7 @@ interface ImportResult {
   totalRecords: number;
   successfulRecords: number;
   failedRecords: number;
+  skippedRecords?: number;
   errors: string[];
   warnings: string[];
   processingTimeMs: number;
@@ -241,11 +242,19 @@ function TemplateCard() {
       // is a bit fiddly with the interceptor, and we only need to
       // stream a binary file with the same JWT on the header.
       const token = getStoredToken();
-      const res = await fetch('/api/admin/products/bulk-import/template', {
+      // Same base the axios client uses — on devadmin the API lives on a
+      // different host; a bare "/api/..." hit the UI host and the SPA
+      // fallback handed back index.html saved as ".xlsx".
+      const apiBase = import.meta.env.VITE_API_BASE_URL ?? '';
+      const res = await fetch(`${apiBase}/api/admin/products/bulk-import/template`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
       if (!res.ok) {
         setErr(`Download failed (${res.status}). Try again in a moment.`);
+        return;
+      }
+      if ((res.headers.get('content-type') ?? '').includes('text/html')) {
+        setErr('The server returned a web page instead of the Excel template. Check the API base URL.');
         return;
       }
       const blob = await res.blob();
@@ -369,13 +378,14 @@ function FilePicker({
 function ResultCard({ result }: { result: ImportResult }) {
   const successCount = result.successfulRecords ?? 0;
   const failedCount = result.failedRecords ?? 0;
+  const skippedCount = result.skippedRecords ?? 0;
   const totalCount = result.totalRecords ?? 0;
   const status = (result.status ?? 'FAILED').toUpperCase();
   const isSuccess = status === 'SUCCESS';
   const isPartial = status === 'PARTIAL_SUCCESS';
 
   const banner = isSuccess
-    ? { cls: 'bg-success-soft border-success', color: 'text-success', Icon: CheckCircle2, label: 'Import successful' }
+    ? { cls: 'bg-success-soft border-success', color: 'text-success', Icon: CheckCircle2, label: successCount === 0 && skippedCount > 0 ? 'Nothing new to import - every row already exists' : 'Import successful' }
     : isPartial
     ? { cls: 'bg-warning-soft border-warning', color: 'text-warning', Icon: AlertTriangle, label: 'Partial success — some rows failed' }
     : { cls: 'bg-danger-soft border-danger', color: 'text-danger', Icon: XCircle, label: 'Import failed' };
@@ -404,9 +414,10 @@ function ResultCard({ result }: { result: ImportResult }) {
       </div>
 
       {totalCount > 0 ? (
-        <div className="mt-4 grid gap-2 sm:grid-cols-3">
+        <div className="mt-4 grid gap-2 sm:grid-cols-4">
           <StatBox label="Total" value={String(totalCount)} tone="secondary" />
           <StatBox label="Imported" value={String(successCount)} tone="success" />
+          <StatBox label="Skipped (already exist)" value={String(skippedCount)} tone="secondary" />
           <StatBox label="Failed" value={String(failedCount)} tone={failedCount > 0 ? 'danger' : 'secondary'} />
         </div>
       ) : null}

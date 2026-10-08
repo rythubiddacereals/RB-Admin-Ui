@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Check,
@@ -35,6 +35,108 @@ interface QuantityOption {
 interface ListResponse {
   count: number;
   options: QuantityOption[];
+}
+
+// Pack sizes are never typed as free text: a number plus a unit from this
+// list. That is what stops "250 gms", "250grams" and "250g" from becoming
+// three different options.
+const PACK_UNITS: { value: string; label: string }[] = [
+  { value: 'g', label: 'g (grams)' },
+  { value: 'kg', label: 'kg (kilograms)' },
+  { value: 'ml', label: 'ml (millilitres)' },
+  { value: 'litre', label: 'litre' },
+  { value: 'piece', label: 'piece' },
+  { value: 'bundle', label: 'bundle' },
+  { value: 'packet', label: 'packet' },
+  { value: 'dozen', label: 'dozen' },
+];
+const PLURAL_UNITS = ['litre', 'piece', 'bundle', 'packet'];
+
+function composePack(amount: string, unit: string): string {
+  const n = Number(amount.trim());
+  // Must be above 0; the label uses the clean number ("05" -> "5", "0.50" -> "0.5").
+  if (!amount.trim() || !Number.isFinite(n) || n <= 0) return '';
+  const a = String(n);
+  return `${a} ${unit}${n !== 1 && PLURAL_UNITS.includes(unit) ? 's' : ''}`;
+}
+
+function parsePack(name: string): { amount: string; unit: string } {
+  const m = name
+    .trim()
+    .toLowerCase()
+    .match(/^(\d+(?:\.\d+)?)\s*(g|kg|ml|litres?|pieces?|bundles?|packets?|dozen)$/);
+  if (!m) return { amount: '', unit: 'kg' };
+  return { amount: m[1], unit: m[2] === 'dozen' ? 'dozen' : m[2].replace(/s$/, '') };
+}
+
+function PackSizePicker({
+  value,
+  onChange,
+  disabled,
+  autoFocus,
+  onEnter,
+  onEscape,
+}: {
+  value: string;
+  onChange: (name: string) => void;
+  disabled?: boolean;
+  autoFocus?: boolean;
+  onEnter?: () => void;
+  onEscape?: () => void;
+}) {
+  const initial = parsePack(value);
+  const [amount, setAmount] = useState(initial.amount);
+  const [unit, setUnit] = useState(initial.unit);
+  // Parent cleared the value (after a successful add) - reset the fields.
+  useEffect(() => {
+    if (value === '') setAmount('');
+  }, [value]);
+  const push = (a: string, u: string) => onChange(composePack(a, u));
+  return (
+    <span className="inline-flex items-center gap-2">
+      <input
+        type="number"
+        min={0.001}
+        step="any"
+        value={amount}
+        onChange={e => {
+          // No leading zeros: "05" becomes "5" as you type ("0." is allowed while typing a decimal).
+          const v = e.target.value.replace(/^0+(?=\d)/, '');
+          setAmount(v);
+          push(v, unit);
+        }}
+        onKeyDown={e => {
+          if (e.key === 'Enter' && onEnter) {
+            e.preventDefault();
+            onEnter();
+          }
+          if (e.key === 'Escape' && onEscape) onEscape();
+        }}
+        placeholder="e.g. 250"
+        className="w-28 rounded-lg border-2 border-secondary-200 px-3 py-2 font-semibold focus:border-primary-500 focus:outline-none"
+        disabled={disabled}
+        autoFocus={autoFocus}
+      />
+      <select
+        value={unit}
+        onChange={e => {
+          setUnit(e.target.value);
+          push(amount, e.target.value);
+        }}
+        className="rounded-lg border-2 border-secondary-200 px-3 py-2 font-semibold focus:border-primary-500 focus:outline-none"
+        disabled={disabled}
+      >
+        {PACK_UNITS.map(u => (
+          <option key={u.value} value={u.value}>
+            {u.label}
+          </option>
+        ))}
+      </select>
+      <span className="min-w-[70px] text-sm font-bold text-primary-700">
+        {composePack(amount, unit) || ''}
+      </span>
+    </span>
+  );
 }
 
 export function QuantityOptionsPage() {
@@ -205,15 +307,12 @@ export function QuantityOptionsPage() {
         <span className="text-sm font-bold text-secondary-800">
           Add a new option:
         </span>
-        <input
-          type="text"
+        <PackSizePicker
           value={newName}
-          onChange={e => setNewName(e.target.value)}
-          placeholder='e.g. "1 kg", "500g", "2 L"'
-          className="flex-1 min-w-[200px] rounded-lg border-2 border-secondary-200 px-4 py-2 font-semibold focus:border-primary-500 focus:outline-none"
-          maxLength={50}
+          onChange={setNewName}
           disabled={createMut.isPending}
         />
+        <span className="flex-1" />
         <button
           type="submit"
           disabled={!newName.trim() || createMut.isPending}
@@ -268,16 +367,12 @@ export function QuantityOptionsPage() {
                   >
                     <td className="px-4 py-3">
                       {editing ? (
-                        <input
-                          type="text"
+                        <PackSizePicker
+                          key={o.id}
                           value={editingValue}
-                          onChange={e => setEditingValue(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') saveEdit();
-                            if (e.key === 'Escape') cancelEdit();
-                          }}
-                          className="w-64 rounded-md border-2 border-primary-500 px-3 py-1.5 font-semibold focus:outline-none"
-                          maxLength={50}
+                          onChange={setEditingValue}
+                          onEnter={saveEdit}
+                          onEscape={cancelEdit}
                           autoFocus
                           disabled={renameMut.isPending}
                         />

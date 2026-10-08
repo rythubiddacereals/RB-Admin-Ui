@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Edit2,
@@ -39,6 +39,10 @@ interface Deal {
   maxQtyPerCustomer: number;
   startsAt: string;   // 'yyyy-MM-dd HH:mm' (local wall clock, per server)
   endsAt: string;
+  /** Absolute instants (epoch ms) and the server's clock at response time. */
+  startsAtMs?: number;
+  endsAtMs?: number;
+  serverNow?: number;
   remainingSeconds: number;
   isActive: number;
   sortOrder: number;
@@ -157,8 +161,9 @@ function fromDatetimeLocal(local: string): number {
 type Status = 'live' | 'scheduled' | 'expired' | 'hidden';
 function derivedStatus(d: Deal, now: number): Status {
   if (d.isActive !== 1) return 'hidden';
-  const start = fromDatetimeLocal(toDatetimeLocal(d.startsAt));
-  const end = fromDatetimeLocal(toDatetimeLocal(d.endsAt));
+  // Server-sent instants: independent of this computer's clock and timezone.
+  const start = d.startsAtMs || fromDatetimeLocal(toDatetimeLocal(d.startsAt));
+  const end = d.endsAtMs || fromDatetimeLocal(toDatetimeLocal(d.endsAt));
   if (now < start) return 'scheduled';
   if (now > end) return 'expired';
   return 'live';
@@ -188,13 +193,22 @@ export function TodaysDealsPage() {
     },
   });
 
-  // Tick every second so the countdown + status column stay live
-  // without hitting the server. Component-scoped — no memory leak.
+  // The deal clock is the SERVER's clock, never this computer's. Each list
+  // response carries the server time; we keep the difference to the local
+  // clock and tick from there, so a laptop that is minutes fast or slow (or
+  // in another timezone) still shows the true Live / Scheduled / remaining.
+  const serverNowAtFetch = data?.deals?.[0]?.serverNow;
+  const clockOffsetRef = useRef(0);
+  useEffect(() => {
+    if (serverNowAtFetch) clockOffsetRef.current = serverNowAtFetch - Date.now();
+  }, [serverNowAtFetch]);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
+    const tick = () => setNow(Date.now() + clockOffsetRef.current);
+    tick();
+    const t = setInterval(tick, 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [serverNowAtFetch]);
 
   const [form, setForm] = useState<FormValues | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<Deal | null>(null);
@@ -327,7 +341,7 @@ export function TodaysDealsPage() {
             <tbody>
               {deals.map(d => {
                 const status = derivedStatus(d, now);
-                const end = fromDatetimeLocal(toDatetimeLocal(d.endsAt));
+                const end = d.endsAtMs || fromDatetimeLocal(toDatetimeLocal(d.endsAt));
                 return (
                   <tr
                     key={d.id}
@@ -519,6 +533,17 @@ function DealFormModal({
     const q = productSearch.trim().toLowerCase();
     return products.filter(p => p.name.toLowerCase().includes(q)).slice(0, 50);
   }, [products, productSearch]);
+  const selectedProduct = useMemo(
+    () => products.find(p => p.id === value.productId) ?? null,
+    [products, value.productId],
+  );
+  // Fill a variant row from one of the product's own packs — replaces a
+  // blank row if there is one, otherwise appends.
+  const addVariantFromOption = (o: QtyOptionRow) => {
+    const kept = value.variants.filter(r => r.label.trim() || String(r.price).trim());
+    if (kept.some(r => r.label.trim().toLowerCase() === o.name.trim().toLowerCase())) return;
+    set({ variants: [...kept, { label: o.name, price: String(o.price) }] });
+  };
 
   const hasValidVariant = value.variants.some(
     v => v.label.trim() && Number(v.price) > 0,
@@ -545,6 +570,12 @@ function DealFormModal({
             </div>
           ) : (
             <>
+              {selectedProduct ? (
+                <div className="mb-2 flex items-center gap-2 rounded-lg border-2 border-primary-500 bg-primary-50 px-3 py-2 text-sm font-bold text-primary-700">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-primary-600">Selected</span>
+                  <span className="truncate">{selectedProduct.name}</span>
+                </div>
+              ) : null}
               <input
                 type="search"
                 value={productSearch}
@@ -566,7 +597,13 @@ function DealFormModal({
                         key={p.id}
                         type="button"
                         onClick={() =>
-                          set({ productId: p.id, qtyOptionId: null })
+                          // A different product means different pack sizes:
+                          // start the variant rows fresh.
+                          set(
+                            value.productId === p.id
+                              ? { productId: p.id, qtyOptionId: null }
+                              : { productId: p.id, qtyOptionId: null, variants: [{ label: '', price: '' }] },
+                          )
                         }
                         className={`flex w-full items-center gap-3 border-b border-secondary-100 px-3 py-2 text-left last:border-b-0 ${
                           active
@@ -609,6 +646,38 @@ function DealFormModal({
           <div className="space-y-2">
             {value.variants.map((v, i) => (
               <div key={i} className="flex items-center gap-2">
+                {selectedProduct && selectedProduct.qtyOptions && selectedProduct.qtyOptions.length > 0 ? (
+                  <select
+                    value={v.label}
+                    onChange={e => {
+                      const name = e.target.value;
+                      const opt = selectedProduct.qtyOptions.find(o => o.name === name);
+                      set({
+                        variants: value.variants.map((row, idx) =>
+                          idx === i
+                            ? { label: name, price: String(row.price).trim() ? row.price : opt ? String(opt.price) : '' }
+                            : row),
+                      });
+                    }}
+                    className={inputCls}
+                    disabled={submitting}
+                    aria-label="Variant"
+                  >
+                    <option value="">- Select pack size -</option>
+                    {selectedProduct.qtyOptions.map(o => (
+                      <option
+                        key={o.id}
+                        value={o.name}
+                        disabled={value.variants.some((r, idx) => idx !== i && r.label === o.name)}
+                      >
+                        {o.name} (shop price ₹{o.price})
+                      </option>
+                    ))}
+                    {v.label && !selectedProduct.qtyOptions.some(o => o.name === v.label) ? (
+                      <option value={v.label}>{v.label}</option>
+                    ) : null}
+                  </select>
+                ) : (
                 <input
                   type="text"
                   value={v.label}
@@ -617,15 +686,16 @@ function DealFormModal({
                       idx === i ? { ...row, label: e.target.value } : row),
                   })}
                   className={inputCls}
-                  placeholder="Variant (e.g. 500 g)"
+                  placeholder={value.productId ? 'Variant (e.g. 500 g)' : 'Select a product first'}
                   maxLength={60}
-                  disabled={submitting}
+                  disabled={submitting || !value.productId}
                 />
+                )}
                 <input
                   type="number"
                   min={0}
                   step={0.01}
-                  value={v.price}
+                  value={String(v.price) === '0' ? '' : v.price}
                   onChange={e => set({
                     variants: value.variants.map((row, idx) =>
                       idx === i ? { ...row, price: e.target.value } : row),
@@ -653,6 +723,23 @@ function DealFormModal({
             >
               + Add variant
             </button>
+            {selectedProduct && selectedProduct.qtyOptions && selectedProduct.qtyOptions.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-xs font-semibold text-secondary-700">From product:</span>
+                {selectedProduct.qtyOptions.map(o => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => addVariantFromOption(o)}
+                    disabled={submitting}
+                    className="rounded-full border border-secondary-300 bg-white px-2.5 py-1 text-xs font-bold text-gray-800 hover:bg-primary-50"
+                    title="Add this pack as a variant row"
+                  >
+                    {o.name} · ₹{o.price}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
           <p className={hintCls}>
             Each row becomes an option in the shop's dropdown
@@ -665,8 +752,14 @@ function DealFormModal({
             <input
               type="number"
               min={1}
+              max={10}
               value={value.maxQtyPerCustomer}
-              onChange={e => set({ maxQtyPerCustomer: e.target.value })}
+              onChange={e => {
+                // Store-wide cart limit is 10, so a deal cannot allow more.
+                const raw = e.target.value;
+                const n = Number(raw);
+                set({ maxQtyPerCustomer: raw !== '' && n > 10 ? '10' : raw });
+              }}
               className={inputCls}
               placeholder="1"
               required
@@ -674,7 +767,7 @@ function DealFormModal({
             />
             <p className={hintCls}>
               One order per customer at the deal price, capped at this
-              many units. After that the offer hides for them.
+              many units (1 to 10). After that the offer hides for them.
             </p>
           </Field>
         </div>
